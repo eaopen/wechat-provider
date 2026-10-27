@@ -93,7 +93,7 @@ wechat-provider import-jsonl /path/to/my_messages.jsonl
 - 数据库读取的下一阶段参考 [robbin/wechat-exporter](https://github.com/robbin/wechat-exporter)、[Wechat-MCP](https://github.com/xerlxzx/Wechat-MCP) 及 Windows 的 [wechat-local-analytics](https://github.com/davids1896/wechat-local-analytics)；先验证不同微信版本的兼容性，再接入 **只读离线快照**，不直接嵌入未经确认的解密脚本。
 - **不使用 OpenRPA** 作为默认引擎；复杂 Windows 通用业务工作流有实际需求时再评估独立适配。
 
-见 [架构和完成条件](docs/ARCHITECTURE.md)、[Local Bridge 对接边界](docs/LOCAL_BRIDGE.md) 及 [开发要求](AGENTS.md)。
+见 [架构和完成条件](docs/ARCHITECTURE.md)、[2026-10-28 微信 MCP 与发送方案横向调研](docs/WECHAT_MCP_SEND_OPTIONS_2026-10-28.md)、[Local Bridge 对接边界](docs/LOCAL_BRIDGE.md) 及 [开发要求](AGENTS.md)。
 
 ## 开发验证
 
