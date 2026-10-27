@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# No chat data, plaintext databases, keys, captures, or send traces in Git.
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+*.jsonl
+*.key
+key.txt
+wechat_keys.json
+decrypted/
+exports/
+screenshots/
+captures/
+*.log
+.env
+.env.*
+!.env.example
+
+# Desktop and IDE
+.DS_Store
+.idea/
+.vscode/

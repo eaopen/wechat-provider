@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eaopen-wechat-provider"
+version = "0.1.0"
+description = "Local-first, cross-platform WeChat MCP provider with SQLite and native desktop adapters"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+authors = [{name = "eaopen"}]
+dependencies = ["mcp>=1.6,<2"]
+
+[project.optional-dependencies]
+windows = ["pywechat127>=1.9.8"]
+macos = ["wxauto-mac>=1.0.0"]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+wechat-provider = "wechat_provider.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100

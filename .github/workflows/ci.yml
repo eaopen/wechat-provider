@@ -1,0 +1,25 @@
+name: minimal-cross-platform
+on:
+  push:
+    branches: [dev]
+  pull_request:
+    branches: [dev]
+
+jobs:
+  core-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile core
+        run: python -m compileall -q src
+      - name: Run mocked unit tests (does not access WeChat UI)
+        env:
+          PYTHONPATH: src
+        run: python -m unittest discover -s tests -v
