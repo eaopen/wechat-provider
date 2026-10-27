@@ -2,7 +2,7 @@
 
 **跨平台、本地优先的微信 MCP 能力提供者（macOS / Windows）。**
 
-独立运行，无需安装 [Local Bridge](https://github.com/eaopen/local-bridge)；未来可作为普通 MCP Provider 由 Local Bridge 注册和调用。微信聊天数据、实际发送和 UI 操作均由本项目负责，Bridge 不内置微信业务逻辑。
+独立运行，无需安装 [Local Bridge](https://github.com/eaopen/local-bridge)；目前也可由用户通过 Local Bridge 手动注册为本机 MCP Provider 并调用。微信聊天数据、实际发送和 UI 操作仍由本项目负责，Bridge 不内置微信业务逻辑。
 
 ## 当前交付（v0.1.0）
 
@@ -14,7 +14,8 @@
 | Windows 4.x GUI 适配 | 🔶 对接 [pyweixin](https://github.com/Hello-Mr-Crab/pywechat)；需实机验证 |
 | macOS GUI 适配 | 🔶 对接 [wxauto-mac](https://github.com/PatrickHua/wxauto-mac)；需实机验证当前微信版本 |
 | 微信原生 SQLCipher 数据库解密与增量导入 | ❌ 尚未实现，放在独立后续任务 |
-| Local Bridge 直接自动注册 | ❌ 尚未实现；MCP Server 可单独启动 |
+| Local Bridge 本机手动 MCP 接入 | ✅ 已提供，见 [接入步骤](docs/LOCAL_BRIDGE.md)；**未通过真实微信 GUI 验收** |
+| Local Bridge 自动注册 / 浏览器直接读写微信 | ❌ 尚未实现；MCP Server 可单独启动 |
 
 **重要：仓库提供可运行的软件骨架、SQLite 和 MCP 实现，但还没有完成真实微信账号的端到端发送验收。** 微信 4.x 的可访问性树可随账号/版本变化，不能假设任意机器可用。
 
@@ -93,7 +94,7 @@ wechat-provider import-jsonl /path/to/my_messages.jsonl
 - 数据库读取的下一阶段参考 [robbin/wechat-exporter](https://github.com/robbin/wechat-exporter)、[Wechat-MCP](https://github.com/xerlxzx/Wechat-MCP) 及 Windows 的 [wechat-local-analytics](https://github.com/davids1896/wechat-local-analytics)；先验证不同微信版本的兼容性，再接入 **只读离线快照**，不直接嵌入未经确认的解密脚本。
 - **不使用 OpenRPA** 作为默认引擎；复杂 Windows 通用业务工作流有实际需求时再评估独立适配。
 
-见 [架构和完成条件](docs/ARCHITECTURE.md)、[2026-10-28 微信 MCP 与发送方案横向调研](docs/WECHAT_MCP_SEND_OPTIONS_2026-10-28.md)、[Local Bridge 对接边界](docs/LOCAL_BRIDGE.md) 及 [开发要求](AGENTS.md)。
+见 [架构和完成条件](docs/ARCHITECTURE.md)、[2026-10-28 微信 MCP 与发送方案横向调研](docs/WECHAT_MCP_SEND_OPTIONS_2026-10-28.md)、[Local Bridge 当前实际接入命令与边界](docs/LOCAL_BRIDGE.md) 及 [开发要求](AGENTS.md)。
 
 ## 开发验证
 
