@@ -48,6 +48,6 @@ def read_jsonl(path: Path) -> tuple[list[dict], dict]:
             rows.append({"chat_id": obj["chat_id"].strip(), "source_id": obj["source_id"].strip(),
                          "text": obj["text"], "sender": obj.get("sender"), "sent_at": stamp,
                          "source": obj.get("source") or "jsonl"})
-        except (ValueError, TypeError, OverflowError):
+        except (ValueError, TypeError, OverflowError, RecursionError):
             raise ValueError(f"invalid export record at line {number}; nothing imported") from None
     return rows, counts
