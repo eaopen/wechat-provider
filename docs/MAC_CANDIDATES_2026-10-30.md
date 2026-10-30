@@ -1,6 +1,8 @@
 # Mac 微信候选方案源码评审（2026-10-30）
 
-结论：短期可见片段优先研究“指定窗口截图 + 本机 Vision OCR + 用户核对片段”；长期数据库读取另将 [GreenBubbles 列为重点候选](GREENBUBBLES_VALIDATION_2026-10-30.md)，已完成隔离虚构数据测试，真实取钥/读取未验收。这是一条待验证读取路径，不是现有 Mac 接入已成功。此次只审源码，未运行候选脚本或操作微信。
+结论（按最新产品决定调整）：**结构化 SQLite / SQLCipher / WCDB 读取为主线**，优先复用 [GreenBubbles 等现有实现](GREENBUBBLES_VALIDATION_2026-10-30.md)。先验证已有授权导出和增量导入，不在日常账号初始化取钥。AX / AppleScript 保留用于 UI 操作与发送；Vision OCR 仅辅助少量可见文字、标题与发送核验，撤回以 OCR 为主读取通道的建议。截图加大模型只用于开发调试，不增加后台截图轮询。Chat Copilot 继续可靠的人工输入，不等待微信实时读取。
+
+下表保留先前 GUI 候选源码研究，不能据此认为实时读写已验收。
 
 | 候选与审阅版本 | 可借鉴部分 | 不能直接接入的原因 |
 | --- | --- | --- |
@@ -14,7 +16,7 @@
 - [wx-gui 驱动](https://github.com/dingliang/wx-gui/blob/4c6d218509a72af1acbe459a036298d5d26c042c/app/automation/drivers/accessibility_driver.py) 和 [Vision OCR](https://github.com/dingliang/wx-gui/blob/4c6d218509a72af1acbe459a036298d5d26c042c/app/automation/ocr/vision_ocr.py)。直接当前会话读取先检查运行/登录；搜索、切换和批量快照另有主动操作。不能将整个项目当成被动读取器。
 - [窗口捕获](https://github.com/BearyRadish/wechat-macos-automation/blob/e9230e872df90b24bb8f006101a0e1f889c25c64/scripts/wincap.swift)。helper 本身没有激活/重启微信，但捕获权限、空白图、窗口选取和当前版本兼容仍需验证；作者使用报告不等于本机验收。
 
-## 最小接入顺序
+## GUI 辅助能力的后续边界（不作为主读取开发顺序）
 
 1. 独立编写/复用许可明确的小型截图组件：精确 bundle ID、PID、window ID；多窗口不猜选，不自动请求/重置权限，不激活窗口。
 2. 用户单独同意后只做一次当前可见窗口的被动捕获；不切换、不滚动、不发送。空白图、标题不明确、登录/权限异常即停止，不改用另一库重复试。遵循 [登录保护](MACOS_LOGIN_SAFETY_2026-10-28.md)。

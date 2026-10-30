@@ -112,3 +112,15 @@ License: Apache-2.0. 第三方依赖遵循各自许可，不直接复制其源�
 `wechat_status` 返回 `read_contract_version=1`，区分可尝试读取与实机验收。`source="local_index"` 只读 Provider 自有 SQLite，不初始化 GUI 后端；`source="desktop_ui"` 尝试界面读取，失败时的索引降级仍标为 `local_index` / `cached_fallback=true`。所有结果均不完整，显示名不是稳定身份。
 
 详见 [读取验收](docs/CHAT_READ_ACCEPTANCE_2026-10-30.md) 和 [Mac 候选源码评审](docs/MAC_CANDIDATES_2026-10-30.md)。
+
+### 结构化历史导入与增量验证
+
+主读取方向是复用成熟的 SQLite / SQLCipher / WCDB 查询实现；GUI 负责操作，Vision OCR 仅作辅助。当前可执行入口是 `wechat-provider import-jsonl <已授权规范化导出>`，不包含取钥、实时数据库读取或自动转换 GreenBubbles JSON。
+
+- 每批最多 8 MiB / 10000 条；全部校验后单事务提交。格式/时间错误或 ID 内容冲突会整批回滚，错误不回显正文。
+- 必需字段缺失的记录保持兼容地计入 `skipped`；重复计入 `duplicates`；返回 `read/imported/skipped/duplicates`，不能把退出成功理解为每条都已导入。
+- `source_id` 应是同一来源下稳定且有命名空间的消息 ID；同一账号/会话/ID 内容不一致会报冲突，不静默覆盖。增量批次可重放，不需清空索引。
+- `sent_at` 若提供必须是带时区 ISO 时间，统一 UTC；最近片段按消息时间取，缺时间以入库时间兜底。旧记录保留原值，同一时刻的等价时区表示可重复导入。
+- 仍返回 `source=local_index`、`live_read=false`、`complete=false`。当前会话契约仍按显示名，不冒充已有稳定联系人 ID 支持。
+
+本地验证：22 项 unittest 通过；真实 CLI 导入/重放到真实 MCP 读取通过（隔离虚构数据）。没有读取私人历史、初始化密钥或操作微信。详见 [结构化导入验证](docs/STRUCTURED_IMPORT_VALIDATION_2026-10-30.md)。

@@ -24,7 +24,7 @@ class ImportTest(unittest.TestCase):
             )
             svc = Service(Store(folder / "index.db"), UnsupportedAdapter("linux"))
             state = import_jsonl(svc, path)
-            self.assertEqual(state, {"read": 2, "imported": 1, "skipped": 1})
+            self.assertEqual(state, {"read": 2, "imported": 1, "skipped": 1, "duplicates": 0})
             self.assertEqual(len(svc.search("开会")["matches"]), 1)
 
 
