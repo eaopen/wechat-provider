@@ -27,15 +27,15 @@ def wechat_status() -> dict:
 
 
 @mcp.tool()
-def wechat_list_chats(limit: int = 30) -> dict:
-    """Read recent chats visible in the signed-in desktop UI (partial view)."""
-    return service().list_chats(limit)
+def wechat_list_chats(limit: int = 30, source: str = "desktop_ui") -> dict:
+    """Read partial desktop_ui sessions or explicitly query local_index without any UI action."""
+    return service().list_chats(limit, source)
 
 
 @mcp.tool()
-def wechat_get_messages(chat_id: str, limit: int = 50) -> dict:
-    """Read recent messages from a specific local chat and index the text."""
-    return service().get_messages(chat_id, limit)
+def wechat_get_messages(chat_id: str, limit: int = 50, source: str = "desktop_ui") -> dict:
+    """Read a named chat from desktop_ui or local_index. Index reads never touch WeChat."""
+    return service().get_messages(chat_id, limit, source)
 
 
 @mcp.tool()

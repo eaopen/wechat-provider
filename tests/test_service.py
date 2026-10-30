@@ -76,6 +76,23 @@ class ServiceTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.service.send_message(chat, content)
 
+    def test_explicit_index_reads_are_account_scoped_and_never_touch_adapter(self):
+        from unittest.mock import Mock
+        self.store.add_messages("userA", "synthetic", [{"source_id": "1", "text": "hello", "source": "jsonl"}])
+        self.store.add_messages("userB", "private", [{"source_id": "2", "text": "other", "source": "jsonl"}])
+        adapter = Mock()
+        service = Service(self.store, adapter, "userA")
+        chats = service.list_chats(source="local_index")
+        self.assertEqual([x["chat_id"] for x in chats["chats"]], ["synthetic"])
+        result = service.get_messages("synthetic", source="local_index")
+        self.assertFalse(result["live_read"])
+        self.assertEqual(result["messages"][0]["source"], "jsonl")
+        self.assertIn("imported_at", result["messages"][0])
+        self.assertEqual(service.get_messages("private", source="local_index")["messages"], [])
+        self.assertEqual(adapter.mock_calls, [])
+        with self.assertRaises(ValueError):
+            service.get_messages("synthetic", source="invalid")
+
 
 if __name__ == "__main__":
     unittest.main()

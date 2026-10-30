@@ -121,12 +121,55 @@ class Store:
                 count += result.rowcount
         return count
 
+    def import_messages(self, account_key: str, rows: list[dict[str, Any]]) -> dict:
+        """One transaction; duplicate IDs must agree, never silently overwrite history."""
+        imported = duplicates = 0
+        with self._connect() as db:
+            for row in rows:
+                identity = (account_key, row["chat_id"], row["source_id"])
+                existing = db.execute(
+                    "SELECT text, sender, sent_at, source FROM messages "
+                    "WHERE account_key=? AND chat_id=? AND source_id=?", identity,
+                ).fetchone()
+                values = (row["text"], row.get("sender"), row.get("sent_at"), row["source"])
+                if existing is not None:
+                    previous = list(existing)
+                    # Older imports stored the original ISO offset; compare instants.
+                    if previous[2]:
+                        try:
+                            parsed = datetime.fromisoformat(previous[2].replace("Z", "+00:00"))
+                            if parsed.utcoffset() is not None:
+                                previous[2] = parsed.astimezone(timezone.utc).isoformat()
+                        except ValueError:
+                            pass
+                    if tuple(previous) != values:
+                        raise ValueError("message identity conflict; entire import rolled back")
+                    duplicates += 1
+                    continue
+                db.execute(
+                    "INSERT INTO messages(account_key,chat_id,source_id,text,sender,sent_at,"
+                    "source,imported_at) VALUES (?,?,?,?,?,?,?,?)",
+                    (*identity, *values, utc_now()),
+                )
+                imported += 1
+        return {"imported": imported, "duplicates": duplicates}
+
+    def list_chats(self, account_key: str, limit: int = 30) -> list[dict[str, Any]]:
+        """Only our existing index; never enumerate a desktop or another account."""
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT chat_id, MAX(imported_at) AS last_indexed_at, COUNT(*) AS message_count "
+                "FROM messages WHERE account_key=? GROUP BY chat_id ORDER BY MAX(id) DESC LIMIT ?",
+                (account_key, min(max(1, limit), 100)),
+            ).fetchall()
+        return [{**dict(row), "title": row["chat_id"], "id_kind": "display_name"} for row in rows]
+
     def get_messages(self, account_key: str, chat_id: str, limit: int = 50) -> list[dict[str, Any]]:
         with self._connect() as db:
             rows = db.execute(
-                """SELECT chat_id, source_id, text, sender, sent_at, source
+                """SELECT chat_id, source_id, text, sender, sent_at, source, imported_at
                    FROM messages WHERE account_key=? AND chat_id=?
-                   ORDER BY id DESC LIMIT ?""",
+                   ORDER BY COALESCE(julianday(sent_at), julianday(imported_at)) DESC, id DESC LIMIT ?""",
                 (account_key, chat_id, min(max(1, limit), 200)),
             ).fetchall()
         return [dict(x) for x in reversed(rows)]

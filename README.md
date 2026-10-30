@@ -12,7 +12,7 @@
 | 本地 SQLite / FTS5 文本索引 | ✅ 已实现；仅检索已读/导入的数据 |
 | 发送任务记账 / 幂等键 / 单机 GUI 锁 | ✅ 已实现；RPA 调用在隔离子进程中，不污染 MCP stdio；不声称成功送达 |
 | Windows 4.x GUI 适配 | 🔶 对接 [pyweixin](https://github.com/Hello-Mr-Crab/pywechat)；需实机验证 |
-| macOS GUI 适配 | 🔶 对接 [wxauto-mac](https://github.com/PatrickHua/wxauto-mac)；需实机验证当前微信版本 |
+| macOS GUI 适配 | ⏸ 登录保护暂停；实时读写在适配器入口阻断，已有索引可用 |
 | 微信原生 SQLCipher 数据库解密与增量导入 | ❌ 尚未实现，放在独立后续任务 |
 | Local Bridge 本机手动 MCP 接入 | ✅ 已提供，见 [接入步骤](docs/LOCAL_BRIDGE.md)；**未通过真实微信 GUI 验收** |
 | Local Bridge 自动注册 / 浏览器直接读写微信 | ❌ 尚未实现；MCP Server 可单独启动 |
@@ -37,7 +37,7 @@ Windows 额外安装 **pyweixin**（上游包 pywechat127）：
 pip install -e ".[windows]"
 ```
 
-macOS 额外安装 **wxauto-mac**，且在系统设置中授权启动终端或 Agent 的辅助功能：
+macOS 的旧 AX 后端依赖 **wxauto-mac**，但当前因登录保护暂停，安装依赖不会解除保护；无需为了索引读取反复调整权限：
 
 ```sh
 pip install -e ".[macos]"
@@ -57,8 +57,8 @@ wechat-provider serve
 提供六个工具：
 
 - `wechat_status`
-- `wechat_list_chats(limit)`
-- `wechat_get_messages(chat_id, limit)`
+- `wechat_list_chats(limit, source="desktop_ui")`
+- `wechat_get_messages(chat_id, limit, source="desktop_ui")`
 - `wechat_search(query, chat_id?, limit)`
 - `wechat_send_message(chat_id, text, idempotency_key?)`
 - `wechat_get_send_status(task_id)`
@@ -106,3 +106,21 @@ python -m compileall -q src
 CI 只对 SQLite / MCP 无关核心 / 模拟 RPA 做跨平台验证，**不会声称真实微信测试通过**。
 
 License: Apache-2.0. 第三方依赖遵循各自许可，不直接复制其源码。
+
+## 明确来源的聊天片段读取
+
+`wechat_status` 返回 `read_contract_version=1`，区分可尝试读取与实机验收。`source="local_index"` 只读 Provider 自有 SQLite，不初始化 GUI 后端；`source="desktop_ui"` 尝试界面读取，失败时的索引降级仍标为 `local_index` / `cached_fallback=true`。所有结果均不完整，显示名不是稳定身份。
+
+详见 [读取验收](docs/CHAT_READ_ACCEPTANCE_2026-10-30.md) 和 [Mac 候选源码评审](docs/MAC_CANDIDATES_2026-10-30.md)。
+
+### 结构化历史导入与增量验证
+
+主读取方向是复用成熟的 SQLite / SQLCipher / WCDB 查询实现；GUI 负责操作，Vision OCR 仅作辅助。当前可执行入口是 `wechat-provider import-jsonl <已授权规范化导出>`，不包含取钥、实时数据库读取或自动转换 GreenBubbles JSON。
+
+- 每批最多 8 MiB / 10000 条；全部校验后单事务提交。格式/时间错误或 ID 内容冲突会整批回滚，错误不回显正文。
+- 必需字段缺失的记录保持兼容地计入 `skipped`；重复计入 `duplicates`；返回 `read/imported/skipped/duplicates`，不能把退出成功理解为每条都已导入。
+- `source_id` 应是同一来源下稳定且有命名空间的消息 ID；同一账号/会话/ID 内容不一致会报冲突，不静默覆盖。增量批次可重放，不需清空索引。
+- `sent_at` 若提供必须是带时区 ISO 时间，统一 UTC；最近片段按消息时间取，缺时间以入库时间兜底。旧记录保留原值，同一时刻的等价时区表示可重复导入。
+- 仍返回 `source=local_index`、`live_read=false`、`complete=false`。当前会话契约仍按显示名，不冒充已有稳定联系人 ID 支持。
+
+本地验证：22 项 unittest 通过；真实 CLI 导入/重放到真实 MCP 读取通过（隔离虚构数据）。没有读取私人历史、初始化密钥或操作微信。详见 [结构化导入验证](docs/STRUCTURED_IMPORT_VALIDATION_2026-10-30.md)。
