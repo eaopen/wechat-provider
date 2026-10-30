@@ -31,4 +31,4 @@ State 目录必须已有 `config.json`、`keys.json`、`identity.json`。密钥�
 
 ## macOS 桌面应用权限
 
-终端验证成功不代表桌面进程具有相同权限。桌面应用读取微信容器可能被 macOS 拒绝（EPERM）；SDK 的递归枚举原先会把它掩盖成零个数据库。本 Reader 先直接检查目录访问，返回 `source_access_denied`，由 Bridge 显示系统授权指引。用户需在系统设置的隐私与安全性中为实际运行的 Bridge 应用授权，再重启 Bridge；不要为此重新取钥、重签名微信或重新登录。
+终端验证成功不代表桌面进程具有相同权限。桌面应用读取微信容器可能被 macOS 拒绝（EPERM）；SDK 的递归枚举原先会把它掩盖成零个数据库。本 Reader 先直接检查目录访问，返回 `source_access_denied`，由 Bridge 显示系统授权指引。目标权限所有者为独立 Provider App。Bridge 应注册 socket MCP 代理，不能继续由 Bridge 启动 Reader 并要求授权 Bridge。安装方式及待验收项见 [独立 Provider](MACOS_INDEPENDENT_PROVIDER.md)。不要为此重新取钥、重签名微信或重新登录。
