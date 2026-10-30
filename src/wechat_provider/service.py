@@ -14,6 +14,7 @@ from .locks import desktop_lock
 from .models import AdapterUnavailable, WeChatAdapter
 from .store import Store
 from .greenbubbles_reader import GreenBubblesReader
+from .wechat_mcp_reader import configured_reader
 
 
 def default_db_path() -> Path:
@@ -186,4 +187,4 @@ class Service:
 
 def new_service() -> Service:
     account_key = os.environ.get("WECHAT_PROVIDER_ACCOUNT", "default")
-    return Service(Store(default_db_path()), native_adapter(), account_key, GreenBubblesReader.from_env())
+    return Service(Store(default_db_path()), native_adapter(), account_key, configured_reader())

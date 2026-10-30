@@ -18,6 +18,8 @@ def bounded(value, maximum=4096):
 
 
 class GreenBubblesReader:
+    backend = "greenbubbles"
+    schema = "greenbubbles.query.v1"
     def __init__(self, executable='', profile='', source_identity='', timeout=15):
         self.executable = executable
         self.profile = profile
@@ -34,7 +36,7 @@ class GreenBubblesReader:
         installed = bool(self.executable and Path(self.executable).is_absolute()
                          and Path(self.executable).is_file() and os.access(self.executable, os.X_OK))
         configured = bounded(self.profile, 200) and bounded(self.source_identity, 512)
-        return {'backend': 'greenbubbles', 'installed': installed, 'configured': configured,
+        return {'backend': self.backend, 'installed': installed, 'configured': configured,
                 'available': installed and configured, 'verified': False,
                 'id_kind': 'stable_conversation_id', 'source_identity': self.source_identity if configured else None}
 
@@ -68,6 +70,8 @@ class GreenBubblesReader:
                     proc.kill()
                     raise AdapterUnavailable('structured reader timed out') from None
                 if code:
+                    if output[0].strip() == b'{"error":"source_access_denied"}':
+                        raise AdapterUnavailable('source_access_denied')
                     raise AdapterUnavailable('structured reader query failed; no fallback attempted')
                 return json.loads(output[0])
         except (OSError, ValueError, RecursionError):
@@ -99,7 +103,7 @@ class GreenBubblesReader:
             args += ['--query-stdin']
         data = self._run(args, query)
         try:
-            if (data['schema'] != 'greenbubbles.query.v1' or type(data['formatVersion']) is not int
+            if (data['schema'] != self.schema or type(data['formatVersion']) is not int
                     or data['formatVersion'] != 1 or data['ok'] is not True
                     or data['operation'] != operation or data['source']['identity'] != self.source_identity
                     or data['source']['mode'] not in ('liveEncrypted', 'snapshotEncrypted', 'decrypted')):
@@ -154,7 +158,7 @@ class GreenBubblesReader:
             key = {'conversations.list': 'chats', 'messages.list': 'messages', 'messages.search': 'matches'}[operation]
             return {key: rows, 'chat_id': chat_id, 'source': 'structured_db',
                     'id_kind': 'stable_conversation_id', 'source_identity': self.source_identity,
-                    'source_namespace': 'greenbubbles', 'source_mode': data['source']['mode'],
+                    'source_namespace': self.backend, 'source_mode': data['source']['mode'],
                     'live_read': False, 'complete': False,
                     'coverage_complete': consistency['coverageComplete'], 'consistency': consistency,
                     'warnings': data['warnings'], 'has_more': page['hasMore'], 'next_cursor': next_cursor}

@@ -115,7 +115,7 @@ License: Apache-2.0. 第三方依赖遵循各自许可，不直接复制其源�
 
 ### 结构化历史导入与增量验证
 
-主读取方向是复用成熟的 SQLite / SQLCipher / WCDB 查询实现；GUI 负责操作，Vision OCR 仅作辅助。当前可执行入口是 `wechat-provider import-jsonl <已授权规范化导出>`，不包含取钥、实时数据库读取或自动转换 GreenBubbles JSON。
+主读取方向是复用成熟的 SQLite / SQLCipher / WCDB 查询实现；GUI 负责操作，Vision OCR 仅作辅助。当前可执行入口是 `wechat-provider import-jsonl <已授权规范化导出>`，该导入入口不包含取钥、实时数据库读取或自动转换 GreenBubbles JSON。
 
 - 每批最多 8 MiB / 10000 条；全部校验后单事务提交。格式/时间错误或 ID 内容冲突会整批回滚，错误不回显正文。
 - 必需字段缺失的记录保持兼容地计入 `skipped`；重复计入 `duplicates`；返回 `read/imported/skipped/duplicates`，不能把退出成功理解为每条都已导入。
@@ -130,3 +130,7 @@ License: Apache-2.0. 第三方依赖遵循各自许可，不直接复制其源�
 已提供独立只读适配器：固定已安装 CLI + 用户明确绑定的 Profile/来源身份，通过原六工具的 `source="structured_db"` 读取会话、分页消息和搜索；不获取密钥、不初始化 GUI、不自动复制历史，不改变原有发送后端。`structured_db_read` 只表示已配置且可执行，`verified=false`，不代表实机已验收。
 
 配置与字段边界见 [GreenBubbles Reader](docs/GREENBUBBLES_READER.md)。Bridge #47 已支持该来源；未配置时继续人工粘贴和已有索引。
+
+### 可选 Wechat-MCP 已授权数据库 Reader
+
+已有逐数据库密钥及 Wechat-MCP SDK 时，可通过独立只读 Reader 直接分页读取当前数据库及 WAL，无需全量归档。配置、版本约束及有界搜索说明见 [Wechat-MCP Reader](docs/WECHAT_MCP_READER.md)。不执行取钥、登录或发送；与 GreenBubbles 二选一配置，共用现有 MCP 接口。

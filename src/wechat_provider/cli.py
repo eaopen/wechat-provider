@@ -26,9 +26,23 @@ def main() -> None:
     command = parser.add_subparsers(dest="action", required=True)
     command.add_parser("status", help="Offline prerequisites and local DB state")
     command.add_parser("serve", help="Start local stdio MCP server")
+    daemon = command.add_parser("daemon", help="Independent same-user Unix socket service")
+    daemon.add_argument("--socket", required=True)
+    proxy = command.add_parser("proxy", help="MCP stdio proxy; never starts a reader")
+    proxy.add_argument("--socket", required=True)
     imp = command.add_parser("import-jsonl", help="Index authorized normalized messages")
     imp.add_argument("path", type=Path)
     args = parser.parse_args()
+    if args.action == "daemon":
+        from .local_ipc import serve
+        serve(args.socket, new_service())
+        return
+    if args.action == "proxy":
+        from .local_ipc import RemoteService
+        from . import mcp_server
+        mcp_server._service = RemoteService(args.socket)
+        mcp_server.main()
+        return
     if args.action == "serve":
         try:
             from .mcp_server import main as run_mcp
