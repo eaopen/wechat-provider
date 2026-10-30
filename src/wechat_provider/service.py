@@ -36,17 +36,32 @@ class Service:
         self.lock_path = store.path.with_name("wechat-rpa.lock")
 
     def status(self) -> dict[str, Any]:
+        adapter = self.adapter.status()
         return {
             "provider": "wechat-provider",
             "account_key": self.account_key,
             "db_path": str(self.store.path),
             "fts5_enabled": self.store._fts,
-            "adapter": self.adapter.status(),
+            "adapter": adapter,
             "bridge_required": False,
+            "read_contract_version": 1,
+            "capabilities": {
+                "local_index_read": True,
+                "live_read_available": adapter.get("ready_for_attempt", False),
+                "live_read_verified": False,
+                "send_verified": False,
+                "id_kind": "display_name",
+            },
         }
 
-    def list_chats(self, limit: int = 30) -> dict[str, Any]:
+    def list_chats(self, limit: int = 30, source: str = "desktop_ui") -> dict[str, Any]:
         limit = min(max(1, limit), 100)
+        if source not in {"desktop_ui", "local_index"}:
+            raise ValueError("source must be desktop_ui or local_index")
+        if source == "local_index":
+            return {"chats": self.store.list_chats(self.account_key, limit),
+                    "source": "local_index", "complete": False, "live_read": False,
+                    "warning": "Previously indexed/imported chats only; not current WeChat sessions."}
         try:
             with desktop_lock(self.lock_path):
                 chats = self.adapter.list_chats(limit)
@@ -54,10 +69,17 @@ class Service:
         except AdapterUnavailable as exc:
             return {"chats": [], "error": str(exc), "complete": False}
 
-    def get_messages(self, chat_id: str, limit: int = 50) -> dict[str, Any]:
+    def get_messages(self, chat_id: str, limit: int = 50, source: str = "desktop_ui") -> dict[str, Any]:
         chat_id = chat_id.strip()
-        if not chat_id:
-            raise ValueError("chat_id is required")
+        if not chat_id or len(chat_id) > 200 or "\0" in chat_id:
+            raise ValueError("chat_id must be 1-200 characters")
+        if source not in {"desktop_ui", "local_index"}:
+            raise ValueError("source must be desktop_ui or local_index")
+        if source == "local_index":
+            return {"messages": self.store.get_messages(self.account_key, chat_id, limit),
+                    "chat_id": chat_id, "source": "local_index", "complete": False,
+                    "live_read": False, "id_kind": "display_name",
+                    "warning": "Previously indexed/imported text only; not a live WeChat read."}
         limit = min(max(1, limit), 100)
         try:
             with desktop_lock(self.lock_path):
@@ -66,7 +88,8 @@ class Service:
             cache = self.store.get_messages(self.account_key, chat_id, limit)
             return {
                 "messages": cache, "source": "local_index",
-                "complete": False, "warning": str(exc),
+                "complete": False, "warning": str(exc), "live_read": False,
+                "read_status": "cached_fallback", "chat_id": chat_id, "id_kind": "display_name",
             }
 
         normalized = []
@@ -93,6 +116,7 @@ class Service:
         return {
             "messages": normalized,
             "source": "desktop_ui",
+            "chat_id": chat_id, "id_kind": "display_name", "live_read": True,
             "complete": False,
             "warning": "UI view only. Names/IDs and history completeness are not guaranteed.",
         }

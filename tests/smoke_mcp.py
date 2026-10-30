@@ -34,7 +34,11 @@ async def main() -> None:
                 assert not result.isError, result
                 query = await session.call_tool("wechat_search", {"query": "不存在的示例"})
                 assert not query.isError, query
-                print("MCP stdio handshake, six tools and read-only status/search: PASS")
+                for tool, args in [("wechat_list_chats", {"source": "local_index"}),
+                                   ("wechat_get_messages", {"chat_id": "synthetic", "source": "local_index"})]:
+                    indexed = await session.call_tool(tool, args)
+                    assert not indexed.isError, indexed
+                print("MCP stdio handshake, six tools, status/search and explicit index reads: PASS")
 
 
 if __name__ == "__main__":

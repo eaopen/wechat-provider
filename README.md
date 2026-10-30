@@ -12,7 +12,7 @@
 | 本地 SQLite / FTS5 文本索引 | ✅ 已实现；仅检索已读/导入的数据 |
 | 发送任务记账 / 幂等键 / 单机 GUI 锁 | ✅ 已实现；RPA 调用在隔离子进程中，不污染 MCP stdio；不声称成功送达 |
 | Windows 4.x GUI 适配 | 🔶 对接 [pyweixin](https://github.com/Hello-Mr-Crab/pywechat)；需实机验证 |
-| macOS GUI 适配 | 🔶 对接 [wxauto-mac](https://github.com/PatrickHua/wxauto-mac)；需实机验证当前微信版本 |
+| macOS GUI 适配 | ⏸ 登录保护暂停；实时读写在适配器入口阻断，已有索引可用 |
 | 微信原生 SQLCipher 数据库解密与增量导入 | ❌ 尚未实现，放在独立后续任务 |
 | Local Bridge 本机手动 MCP 接入 | ✅ 已提供，见 [接入步骤](docs/LOCAL_BRIDGE.md)；**未通过真实微信 GUI 验收** |
 | Local Bridge 自动注册 / 浏览器直接读写微信 | ❌ 尚未实现；MCP Server 可单独启动 |
@@ -37,7 +37,7 @@ Windows 额外安装 **pyweixin**（上游包 pywechat127）：
 pip install -e ".[windows]"
 ```
 
-macOS 额外安装 **wxauto-mac**，且在系统设置中授权启动终端或 Agent 的辅助功能：
+macOS 的旧 AX 后端依赖 **wxauto-mac**，但当前因登录保护暂停，安装依赖不会解除保护；无需为了索引读取反复调整权限：
 
 ```sh
 pip install -e ".[macos]"
@@ -57,8 +57,8 @@ wechat-provider serve
 提供六个工具：
 
 - `wechat_status`
-- `wechat_list_chats(limit)`
-- `wechat_get_messages(chat_id, limit)`
+- `wechat_list_chats(limit, source="desktop_ui")`
+- `wechat_get_messages(chat_id, limit, source="desktop_ui")`
 - `wechat_search(query, chat_id?, limit)`
 - `wechat_send_message(chat_id, text, idempotency_key?)`
 - `wechat_get_send_status(task_id)`
@@ -106,3 +106,9 @@ python -m compileall -q src
 CI 只对 SQLite / MCP 无关核心 / 模拟 RPA 做跨平台验证，**不会声称真实微信测试通过**。
 
 License: Apache-2.0. 第三方依赖遵循各自许可，不直接复制其源码。
+
+## 明确来源的聊天片段读取
+
+`wechat_status` 返回 `read_contract_version=1`，区分可尝试读取与实机验收。`source="local_index"` 只读 Provider 自有 SQLite，不初始化 GUI 后端；`source="desktop_ui"` 尝试界面读取，失败时的索引降级仍标为 `local_index` / `cached_fallback=true`。所有结果均不完整，显示名不是稳定身份。
+
+详见 [读取验收](docs/CHAT_READ_ACCEPTANCE_2026-10-30.md) 和 [Mac 候选源码评审](docs/MAC_CANDIDATES_2026-10-30.md)。

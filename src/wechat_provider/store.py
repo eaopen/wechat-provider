@@ -121,10 +121,20 @@ class Store:
                 count += result.rowcount
         return count
 
+    def list_chats(self, account_key: str, limit: int = 30) -> list[dict[str, Any]]:
+        """Only our existing index; never enumerate a desktop or another account."""
+        with self._connect() as db:
+            rows = db.execute(
+                "SELECT chat_id, MAX(imported_at) AS last_indexed_at, COUNT(*) AS message_count "
+                "FROM messages WHERE account_key=? GROUP BY chat_id ORDER BY MAX(id) DESC LIMIT ?",
+                (account_key, min(max(1, limit), 100)),
+            ).fetchall()
+        return [{**dict(row), "title": row["chat_id"], "id_kind": "display_name"} for row in rows]
+
     def get_messages(self, account_key: str, chat_id: str, limit: int = 50) -> list[dict[str, Any]]:
         with self._connect() as db:
             rows = db.execute(
-                """SELECT chat_id, source_id, text, sender, sent_at, source
+                """SELECT chat_id, source_id, text, sender, sent_at, source, imported_at
                    FROM messages WHERE account_key=? AND chat_id=?
                    ORDER BY id DESC LIMIT ?""",
                 (account_key, chat_id, min(max(1, limit), 200)),

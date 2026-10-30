@@ -49,12 +49,21 @@ class AdapterIntegrationShapesTest(unittest.TestCase):
                 calls.append(("send", friend, text))
                 return True
 
-        with patch.dict(sys.modules, {"wxauto_mac": types.SimpleNamespace(WeChat=WeChat)}):
+        with patch.object(MacAdapter, "_client", return_value=WeChat()):
             a = MacAdapter()
             self.assertEqual(a.list_chats(2)[0]["chat_id"], "文件传输助手")
             self.assertEqual(a.get_messages("文件传输助手", 1)[0]["text"], "B")
             a.send_text("文件传输助手", "hello")
         self.assertEqual(calls[-1], ("send", "文件传输助手", "hello"))
+
+    def test_macos_safety_hold_never_constructs_upstream_client(self):
+        with patch.dict(sys.modules, {"wxauto_mac": types.SimpleNamespace(WeChat=lambda: self.fail("UI touched"))}):
+            from wechat_provider.models import AdapterUnavailable
+            adapter = MacAdapter()
+            for action in [lambda: adapter.list_chats(1), lambda: adapter.get_messages("test", 1),
+                           lambda: adapter.send_text("test", "synthetic")]:
+                with self.assertRaisesRegex(AdapterUnavailable, "macos_login_safety_hold"):
+                    action()
 
 
 if __name__ == "__main__":

@@ -22,19 +22,20 @@ class MacAdapter:
             "backend": self.backend,
             "backend_installed": installed,
             "ui_logged_in": "unknown",
-            "ready_for_attempt": installed,
-            "note": "Needs macOS Accessibility permission and a logged-in WeChat.",
+            "ready_for_attempt": False,
+            "live_read_available": False,
+            "send_available": False,
+            "blocked_reason": "macos_login_safety_hold",
+            "note": "Live automation paused after relogin incidents; local index remains available.",
         }
 
     @staticmethod
     def _client():
-        try:
-            from wxauto_mac import WeChat
-        except ImportError as exc:
-            raise AdapterUnavailable(
-                'Missing wxauto-mac; on Mac install: pip install "wechat-provider[macos]"'
-            ) from exc
-        return WeChat()
+        # Do not instantiate wxauto_mac: initialization itself activates WeChat.
+        raise AdapterUnavailable(
+            "macos_login_safety_hold: live UI disabled pending compatibility audit; "
+            "use explicit local_index reads or manual paste"
+        )
 
     def list_chats(self, limit: int) -> list[dict[str, Any]]:
         sessions = self._client().GetSessionList()
