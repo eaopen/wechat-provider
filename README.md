@@ -124,3 +124,9 @@ License: Apache-2.0. 第三方依赖遵循各自许可，不直接复制其源�
 - 仍返回 `source=local_index`、`live_read=false`、`complete=false`。当前会话契约仍按显示名，不冒充已有稳定联系人 ID 支持。
 
 本地验证：22 项 unittest 通过；真实 CLI 导入/重放到真实 MCP 读取通过（隔离虚构数据）。没有读取私人历史、初始化密钥或操作微信。详见 [结构化导入验证](docs/STRUCTURED_IMPORT_VALIDATION_2026-10-30.md)。
+
+### 可选 GreenBubbles 结构化 Reader
+
+已提供独立只读适配器：固定已安装 CLI + 用户明确绑定的 Profile/来源身份，通过原六工具的 `source="structured_db"` 读取会话、分页消息和搜索；不获取密钥、不初始化 GUI、不自动复制历史，不改变原有发送后端。`structured_db_read` 只表示已配置且可执行，`verified=false`，不代表实机已验收。
+
+配置与字段边界见 [GreenBubbles Reader](docs/GREENBUBBLES_READER.md)。Bridge #47 已支持该来源；未配置时继续人工粘贴和已有索引。
