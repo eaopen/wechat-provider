@@ -13,6 +13,7 @@ from .adapters import native_adapter
 from .locks import desktop_lock
 from .models import AdapterUnavailable, WeChatAdapter
 from .store import Store
+from .greenbubbles_reader import GreenBubblesReader
 
 
 def default_db_path() -> Path:
@@ -29,7 +30,8 @@ def default_db_path() -> Path:
 
 class Service:
     def __init__(self, store: Store, adapter: WeChatAdapter,
-                 account_key: str = "default"):
+                 account_key: str = "default", reader=None):
+        self.reader = reader if reader is not None else GreenBubblesReader()
         self.store = store
         self.adapter = adapter
         self.account_key = account_key
@@ -37,6 +39,7 @@ class Service:
 
     def status(self) -> dict[str, Any]:
         adapter = self.adapter.status()
+        reader = self.reader.status()
         return {
             "provider": "wechat-provider",
             "account_key": self.account_key,
@@ -45,8 +48,12 @@ class Service:
             "adapter": adapter,
             "bridge_required": False,
             "read_contract_version": 1,
+            "readers": {"local_index": {"available": True}, "structured_db": reader},
+            "senders": {"native_ui": {"selected": True,
+                "available": adapter.get("ready_for_attempt", False), "verified": False}},
             "capabilities": {
                 "local_index_read": True,
+                "structured_db_read": reader["available"],
                 "live_read_available": adapter.get("ready_for_attempt", False),
                 "live_read_verified": False,
                 "send_verified": False,
@@ -54,7 +61,11 @@ class Service:
             },
         }
 
-    def list_chats(self, limit: int = 30, source: str = "desktop_ui") -> dict[str, Any]:
+    def list_chats(self, limit: int = 30, source: str = "desktop_ui", cursor: str | None = None) -> dict[str, Any]:
+        if source == "structured_db":
+            return self.reader.query("conversations.list", limit, cursor=cursor)
+        if cursor is not None:
+            raise ValueError("cursor requires structured_db")
         limit = min(max(1, limit), 100)
         if source not in {"desktop_ui", "local_index"}:
             raise ValueError("source must be desktop_ui or local_index")
@@ -69,7 +80,11 @@ class Service:
         except AdapterUnavailable as exc:
             return {"chats": [], "error": str(exc), "complete": False}
 
-    def get_messages(self, chat_id: str, limit: int = 50, source: str = "desktop_ui") -> dict[str, Any]:
+    def get_messages(self, chat_id: str, limit: int = 50, source: str = "desktop_ui", cursor: str | None = None) -> dict[str, Any]:
+        if source == "structured_db":
+            return self.reader.query("messages.list", limit, chat_id, cursor)
+        if cursor is not None:
+            raise ValueError("cursor requires structured_db")
         chat_id = chat_id.strip()
         if not chat_id or len(chat_id) > 200 or "\0" in chat_id:
             raise ValueError("chat_id must be 1-200 characters")
@@ -122,7 +137,11 @@ class Service:
         }
 
     def search(self, query: str, chat_id: str | None = None,
-               limit: int = 30) -> dict[str, Any]:
+               limit: int = 30, source: str = "local_index", cursor: str | None = None) -> dict[str, Any]:
+        if source == "structured_db":
+            return self.reader.query("messages.search", limit, chat_id, cursor, query)
+        if source != "local_index" or cursor is not None:
+            raise ValueError("unsupported search source or cursor")
         rows = self.store.search(self.account_key, query, chat_id, limit)
         return {
             "matches": rows,
@@ -167,4 +186,4 @@ class Service:
 
 def new_service() -> Service:
     account_key = os.environ.get("WECHAT_PROVIDER_ACCOUNT", "default")
-    return Service(Store(default_db_path()), native_adapter(), account_key)
+    return Service(Store(default_db_path()), native_adapter(), account_key, GreenBubblesReader.from_env())

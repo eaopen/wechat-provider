@@ -27,21 +27,21 @@ def wechat_status() -> dict:
 
 
 @mcp.tool()
-def wechat_list_chats(limit: int = 30, source: str = "desktop_ui") -> dict:
-    """Read partial desktop_ui sessions or explicitly query local_index without any UI action."""
-    return service().list_chats(limit, source)
+def wechat_list_chats(limit: int = 30, source: str = "desktop_ui", cursor: str | None = None) -> dict:
+    """List desktop_ui/local_index chats or structured_db stable IDs; cursor only for structured_db."""
+    return service().list_chats(limit, source, cursor)
 
 
 @mcp.tool()
-def wechat_get_messages(chat_id: str, limit: int = 50, source: str = "desktop_ui") -> dict:
-    """Read a named chat from desktop_ui or local_index. Index reads never touch WeChat."""
-    return service().get_messages(chat_id, limit, source)
+def wechat_get_messages(chat_id: str, limit: int = 50, source: str = "desktop_ui", cursor: str | None = None) -> dict:
+    """Read named desktop/index chats or a stable structured_db conversation ID. No automatic fallback across readers."""
+    return service().get_messages(chat_id, limit, source, cursor)
 
 
 @mcp.tool()
-def wechat_search(query: str, chat_id: str | None = None, limit: int = 30) -> dict:
-    """Search previously indexed/imported chat text, not the entire WeChat cloud."""
-    return service().search(query, chat_id, limit)
+def wechat_search(query: str, chat_id: str | None = None, limit: int = 30, source: str = "local_index", cursor: str | None = None) -> dict:
+    """Search local_index by default or explicit structured_db; neither guarantees full history."""
+    return service().search(query, chat_id, limit, source, cursor)
 
 
 @mcp.tool()
