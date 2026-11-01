@@ -72,6 +72,13 @@ class IPCTest(unittest.TestCase):
                 remote = RemoteService(path)
                 self.assertEqual(remote.list_chats(5, 'local_index')['chats'], [])
                 self.assertTrue(remote.status()['ipc']['same_user'])
+                # Synthetic-only explicit retention, with the same UID/IPC contract.
+                saved = remote.save_excerpt('虚构聊天', '我：测试片段')
+                self.assertEqual(saved['imported'], 1)
+                self.assertEqual(remote.save_excerpt('虚构聊天', '我：测试片段')['duplicates'], 1)
+                self.assertEqual(len(remote.list_chats(5, 'local_index')['chats']), 1)
+                self.assertEqual(remote.forget_saved_excerpts('虚构聊天')['removed'], 1)
+                self.assertEqual(remote.list_chats(5, 'local_index')['chats'], [])
                 # Actual MCP initialization, discovery and tool response through proxy.
                 frames = [
                     {'jsonrpc':'2.0','id':1,'method':'initialize','params':{

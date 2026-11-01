@@ -11,7 +11,7 @@ import struct
 
 MAX_FRAME = 1024 * 1024
 METHODS = frozenset(('status', 'list_chats', 'get_messages', 'search',
-                     'send_message', 'get_send_status'))
+                     'send_message', 'get_send_status', 'save_excerpt', 'forget_saved_excerpts'))
 
 
 def peer_uid(connection):

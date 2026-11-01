@@ -10,3 +10,5 @@
 8. **Keep optional backends small.** Port difference stays under `adapters`. OpenRPA is not a default dependency and no business App names should appear in core.
 9. **Prioritize integration over abstraction.** No dynamic plugin registry, cloud task DB, Docker service or enterprise security platform for initial P0.
 10. **macOS login stability is P0.** Two real UI validation rounds caused WeChat to request re-login. Until the cause is audited, do not restart/duplicate/re-sign/debug/modify WeChat or repeat AX-permission trials; preserve local uncommitted work and use offline tests. See [Mac login safety](docs/MACOS_LOGIN_SAFETY_2026-10-28.md).
+
+11. **Opt-in snippets stay opt-in.** Do not automatically persist user-copied text. Explicit save/forget tools may update only Provider-owned SQLite; label and excerpt are not verified WeChat identities or live history. Preserve account scope and idempotence.

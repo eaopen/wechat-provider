@@ -8,7 +8,7 @@
 
 | 功能 | 当前状态 |
 | --- | --- |
-| MCP stdio 6 个工具 | ✅ 已实现 |
+| MCP stdio 8 个工具（含用户主动保存/移除的本地片段） | ✅ 已实现 |
 | 本地 SQLite / FTS5 文本索引 | ✅ 已实现；仅检索已读/导入的数据 |
 | 发送任务记账 / 幂等键 / 单机 GUI 锁 | ✅ 已实现；RPA 调用在隔离子进程中，不污染 MCP stdio；不声称成功送达 |
 | Windows 4.x GUI 适配 | 🔶 对接 [pyweixin](https://github.com/Hello-Mr-Crab/pywechat)；需实机验证 |
@@ -54,7 +54,7 @@ wechat-provider serve
 
 `serve` 使用 MCP **stdio** 传输，适用于 Codex、Claude Code 等支持外部本地 MCP 的客户端。请把 MCP 客户端配置为调用当前虚拟环境中的 `wechat-provider serve`，不是 HTTP 接口。没有后台驻留/开放监听端口的要求。
 
-提供六个工具：
+提供八个工具：
 
 - `wechat_status`
 - `wechat_list_chats(limit, source="desktop_ui")`
@@ -62,6 +62,8 @@ wechat-provider serve
 - `wechat_search(query, chat_id?, limit)`
 - `wechat_send_message(chat_id, text, idempotency_key?)`
 - `wechat_get_send_status(task_id)`
+- wechat_save_excerpt(chat_title, text)：仅显式点击后把用户复制的文字写入 Provider 自有 SQLite 索引
+- wechat_forget_saved_excerpts(chat_title)：只移除此名称下手动保存的片段，不删除微信数据或其他来源导入记录
 
 ## 使用边界
 
@@ -134,3 +136,15 @@ License: Apache-2.0. 第三方依赖遵循各自许可，不直接复制其源�
 ### 可选 Wechat-MCP 已授权数据库 Reader
 
 已有逐数据库密钥及 Wechat-MCP SDK 时，可通过独立只读 Reader 直接分页读取当前数据库及 WAL，无需全量归档。配置、版本约束及有界搜索说明见 [Wechat-MCP Reader](docs/WECHAT_MCP_READER.md)。不执行取钥、登录或发送；与 GreenBubbles 二选一配置，共用现有 MCP 接口。
+
+## Companion 的可选常聊片段
+
+Companion 可以让用户明确给当前复制的聊天片段命名，并点击“保存本轮文字到本机”。
+只保存到 WeChat Provider 自有本机索引，后续 local_index 可以选择这个标签并重新读取；
+**不是微信完整历史、真实联系人 ID、微信实时同步或自动持久化**。可以按相同标签显式
+移除所有手动保存片段，绝不会删除其他来源导入的记录。原始微信账号和数据库不参与操作。
+
+wechat_status.capabilities.manual_excerpt_save=true 表示支持这个明确的写入动作；
+创建、读取、删除均须前台用户动作或用户自行授权的 MCP 客户端调用。
+工具正文是本地 MCP JSON 参数，不应放入命令行或诊断日志。
+详情见 docs/COMPANION_LOCAL_EXCERPTS.md。
