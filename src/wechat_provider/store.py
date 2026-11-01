@@ -154,6 +154,16 @@ class Store:
                 imported += 1
         return {"imported": imported, "duplicates": duplicates}
 
+    def delete_manual_excerpts(self, account_key: str, chat_title: str) -> int:
+        """Delete only explicitly saved copies; preserve all other source records."""
+        with self._connect() as db:
+            result = db.execute(
+                "DELETE FROM messages WHERE account_key=? AND chat_id=? "
+                "AND source='manual_excerpt' AND source_id LIKE 'manual:%'",
+                (account_key, chat_title),
+            )
+            return result.rowcount
+
     def list_chats(self, account_key: str, limit: int = 30) -> list[dict[str, Any]]:
         """Only our existing index; never enumerate a desktop or another account."""
         with self._connect() as db:

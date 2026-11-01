@@ -53,6 +53,7 @@ class Service:
                 "available": adapter.get("ready_for_attempt", False), "verified": False}},
             "capabilities": {
                 "local_index_read": True,
+                "manual_excerpt_save": True,
                 "structured_db_read": reader["available"],
                 "live_read_available": adapter.get("ready_for_attempt", False),
                 "live_read_verified": False,
@@ -60,6 +61,38 @@ class Service:
                 "id_kind": "display_name",
             },
         }
+
+    def save_excerpt(self, chat_title: str, text: str) -> dict[str, Any]:
+        """Explicitly save user-selected text to the Provider's own index.
+
+        No WeChat UI/database access. A display label is not a verified contact ID.
+        Repeated saves of identical text in the same label are idempotent.
+        """
+        if (type(chat_title) is not str or type(text) is not str
+                or not chat_title.strip() or not text.strip()
+                or "\\0" in chat_title or "\\0" in text):
+            raise ValueError("explicit nonempty chat label and text required")
+        title, body = chat_title.strip(), text.strip()
+        if len(title.encode("utf-8")) > 200 or len(body.encode("utf-8")) > 7800:
+            raise ValueError("selected excerpt exceeds local save limit")
+        digest = hashlib.sha256((title+"\\0"+body).encode("utf-8")).hexdigest()
+        row = {"chat_id": title, "source_id": "manual:"+digest,
+               "text": body, "sender": "用户主动复制的片段",
+               "sent_at": None, "source": "manual_excerpt"}
+        result = self.store.import_messages(self.account_key, [row])
+        return {"saved": True, "imported": result["imported"],
+                "duplicates": result["duplicates"], "source": "local_index",
+                "manual_excerpt": True, "chat_title": title,
+                "complete": False, "live_read": False}
+
+    def forget_saved_excerpts(self, chat_title: str) -> dict[str, Any]:
+        """Remove only user-saved excerpts for this label, not imported history."""
+        if (type(chat_title) is not str or not chat_title.strip()
+                or len(chat_title.strip().encode("utf-8")) > 200 or "\\0" in chat_title):
+            raise ValueError("invalid chat label")
+        removed = self.store.delete_manual_excerpts(self.account_key, chat_title.strip())
+        return {"removed": removed, "source": "local_index", "chat_title": chat_title.strip(),
+                "manual_excerpt_only": True}
 
     def list_chats(self, limit: int = 30, source: str = "desktop_ui", cursor: str | None = None) -> dict[str, Any]:
         if source == "structured_db":
