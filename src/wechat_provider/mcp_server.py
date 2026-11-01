@@ -45,6 +45,22 @@ def wechat_search(query: str, chat_id: str | None = None, limit: int = 30, sourc
 
 
 @mcp.tool()
+def wechat_save_excerpt(chat_title: str, text: str) -> dict:
+    """Save user-selected copied text to a labeled *local* index only.
+
+    Caller must obtain an explicit foreground user action; not a WeChat history
+    read, not a verified contact identity and not a message send.
+    """
+    return service().save_excerpt(chat_title, text)
+
+
+@mcp.tool()
+def wechat_forget_saved_excerpts(chat_title: str) -> dict:
+    """On explicit user action, delete only manually saved local copies."""
+    return service().forget_saved_excerpts(chat_title)
+
+
+@mcp.tool()
 def wechat_send_message(chat_id: str, text: str,
                         idempotency_key: str | None = None) -> dict:
     """Submit a message through desktop RPA. Requires user's authorized intent.

@@ -50,6 +50,36 @@ class ServiceTest(unittest.TestCase):
         self.service.get_messages("文件传输助手")
         self.assertEqual(len(self.store.get_messages("userA", "文件传输助手")), 1)
 
+    def test_user_selected_excerpt_is_opt_in_idempotent_and_account_scoped(self):
+        from unittest.mock import Mock
+        read_only = Service(self.store, Mock(), "userA")
+        first = read_only.save_excerpt("测试好友", "甲：明天出差")
+        self.assertEqual(first["imported"], 1)
+        self.assertFalse(first["live_read"])
+        second = read_only.save_excerpt("测试好友", "甲：明天出差")
+        self.assertEqual(second["imported"], 0)
+        self.assertEqual(second["duplicates"], 1)
+        self.assertEqual(len(read_only.list_chats(source="local_index")["chats"]), 1)
+        self.assertEqual(read_only.get_messages("测试好友", source="local_index")["messages"][0]["source"], "manual_excerpt")
+        self.assertEqual(Service(self.store, Mock(), "userB").list_chats(source="local_index")["chats"], [])
+        for title, body in (("", "x"), ("name", ""), ("name", "x" * 7801),
+                            ("x" * 201, "ok"), ("bad\\0label", "ok")):
+            with self.assertRaises(ValueError):
+                read_only.save_excerpt(title, body)
+        self.assertEqual(read_only.forget_saved_excerpts("测试好友")["removed"], 1)
+        self.assertEqual(read_only.forget_saved_excerpts("测试好友")["removed"], 0)
+        self.assertEqual(read_only.list_chats(source="local_index")["chats"], [])
+        self.assertEqual(read_only.adapter.mock_calls, [])
+
+    def test_local_forget_preserves_non_manual_imports(self):
+        self.store.add_messages("userA", "项目群", [
+            {"source_id":"existing", "text":"独立导入", "source":"jsonl"}])
+        self.service.save_excerpt("项目群", "我：手动选中的片段")
+        self.assertEqual(self.service.forget_saved_excerpts("项目群")["removed"], 1)
+        remaining = self.service.get_messages("项目群",source="local_index")["messages"]
+        self.assertEqual(len(remaining),1)
+        self.assertEqual(remaining[0]["source"],"jsonl")
+
     def test_send_is_submitted_not_verified_and_idempotent(self):
         one = self.service.send_message("文件传输助手", "测试文本", "send-once")
         again = self.service.send_message("文件传输助手", "测试文本", "send-once")

@@ -1,0 +1,26 @@
+# Companion 显式本机片段（v0.1.1）
+
+第一次使用时 Provider 索引为空，新增两个用户主动调用的 MCP 工具，让用户建立私有常聊会话，而不是破解微信数据库。
+
+| 工具 | 作用 | 副作用 |
+| --- | --- | --- |
+| wechat_save_excerpt(chat_title, text) | 用户明确选定文字保存到本机 SQLite 索引 | 本机写入；不能当作实时微信历史 |
+| wechat_forget_saved_excerpts(chat_title) | 移除此标签下所有手动保存的片段 | 只删 manual_excerpt，不动其他导入 |
+
+- chat_title 是用户自定义显示标签，非微信稳定 ID；空值/NUL/超过 200 UTF-8 字节拒绝。
+- text 是用户选中的片段，空值/NUL/超过 7800 UTF-8 字节拒绝。文本可能有多条发言；Provider 不猜测真实发言人和时间。
+- 同一标签+相同正文以 SHA-256 标识重复，重复点击不会产生多份。响应只含导入/重复条数等回执。
+- wechat_status.capabilities.manual_excerpt_save=true 是可选能力，不影响旧 6 工具。
+- local_index 读取带 source=manual_excerpt、complete=false、live_read=false，不能冒充完整实时历史。
+- 不点击保存时，原 Companion 粘贴/Agent 流程不会写入 Provider 索引。
+- 显式删除只做 SQLite 普通删除，不保证底层存储块的密码学安全擦除。
+- 完全不打开微信窗口、访问微信私有数据库、重启微信或请求系统读取权限。
+
+## 责任划分
+
+Companion 负责显式点击与隐私告知；Local Bridge 仅通用转发 MCP 工具；WeChat Provider 验证参数、维护本机索引。任何自主调用 MCP 的其他客户端仍须由自身获取用户许可。
+
+## 本机验证
+
+独立 Provider 单元测试覆盖参数限制、账号隔离、重复写入、删除保护，均使用临时 SQLite。
+Companion / Local Bridge / Provider 使用隔离目录与虚构消息完成真实 MCP 流程：状态、保存、重复、列会话、读取、清理。没有访问真实微信索引、正文、权限或登录状态。
