@@ -168,11 +168,20 @@ class Store:
         """Only our existing index; never enumerate a desktop or another account."""
         with self._connect() as db:
             rows = db.execute(
-                "SELECT chat_id, MAX(imported_at) AS last_indexed_at, COUNT(*) AS message_count "
+                "SELECT chat_id, MAX(imported_at) AS last_indexed_at, COUNT(*) AS message_count, "
+                "SUM(CASE WHEN source='manual_excerpt' THEN 1 ELSE 0 END) AS manual_count "
                 "FROM messages WHERE account_key=? GROUP BY chat_id ORDER BY MAX(id) DESC LIMIT ?",
                 (account_key, min(max(1, limit), 100)),
             ).fetchall()
-        return [{**dict(row), "title": row["chat_id"], "id_kind": "display_name"} for row in rows]
+        return [{
+            "chat_id": row["chat_id"],
+            "title": row["chat_id"],
+            "id_kind": "display_name",
+            "last_indexed_at": row["last_indexed_at"],
+            "message_count": row["message_count"],
+            # Honest provenance: only user-saved excerpts vs mixed imported history.
+            "manual_excerpt_only": bool(row["manual_count"]) and row["manual_count"] == row["message_count"],
+        } for row in rows]
 
     def get_messages(self, account_key: str, chat_id: str, limit: int = 50) -> list[dict[str, Any]]:
         with self._connect() as db:

@@ -17,6 +17,8 @@ class FakeAdapter:
         return {"ready_for_attempt": True, "platform": "fake"}
 
     def list_chats(self, limit):
+        if self.unavailable:
+            raise AdapterUnavailable("not installed")
         return [{"chat_id": "文件传输助手", "title": "文件传输助手"}][:limit]
 
     def get_messages(self, chat_id, limit):
@@ -62,14 +64,27 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(len(read_only.list_chats(source="local_index")["chats"]), 1)
         self.assertEqual(read_only.get_messages("测试好友", source="local_index")["messages"][0]["source"], "manual_excerpt")
         self.assertEqual(Service(self.store, Mock(), "userB").list_chats(source="local_index")["chats"], [])
+        # Real NUL bytes must be rejected (not the two-character escape).
         for title, body in (("", "x"), ("name", ""), ("name", "x" * 7801),
-                            ("x" * 201, "ok"), ("bad\\0label", "ok")):
+                            ("x" * 201, "ok"), ("bad\0label", "ok"),
+                            ("name", "bad\0body")):
             with self.assertRaises(ValueError):
                 read_only.save_excerpt(title, body)
+        with self.assertRaises(ValueError):
+            read_only.forget_saved_excerpts("bad\0label")
         self.assertEqual(read_only.forget_saved_excerpts("测试好友")["removed"], 1)
         self.assertEqual(read_only.forget_saved_excerpts("测试好友")["removed"], 0)
         self.assertEqual(read_only.list_chats(source="local_index")["chats"], [])
         self.assertEqual(read_only.adapter.mock_calls, [])
+
+    def test_excerpt_byte_boundaries_are_inclusive(self):
+        from unittest.mock import Mock
+        service = Service(self.store, Mock(), "userB")
+        # Exact 200-byte label and 7800-byte body stay inside the documented bound.
+        first = service.save_excerpt("x" * 200, "字" * 2600)  # 7800 UTF-8 bytes
+        self.assertEqual((first["imported"], first["duplicates"]), (1, 0))
+        self.assertEqual(service.save_excerpt("x" * 200, "字" * 2600)["duplicates"], 1)
+        self.assertEqual(service.forget_saved_excerpts("x" * 200)["removed"], 1)
 
     def test_local_forget_preserves_non_manual_imports(self):
         self.store.add_messages("userA", "项目群", [
@@ -122,6 +137,28 @@ class ServiceTest(unittest.TestCase):
         self.assertEqual(adapter.mock_calls, [])
         with self.assertRaises(ValueError):
             service.get_messages("synthetic", source="invalid")
+
+    def test_index_list_reports_honest_provenance(self):
+        from unittest.mock import Mock
+        adapter = Mock()
+        service = Service(self.store, adapter, "userA")
+        service.save_excerpt("只保存过片段", "我：手动保存")
+        self.store.add_messages("userA", "混合来源", [{"source_id": "i1", "text": "导入", "source": "jsonl"}])
+        service.save_excerpt("混合来源", "我：也保存过")
+        rows = {x["chat_id"]: x for x in service.list_chats(source="local_index")["chats"]}
+        self.assertTrue(rows["只保存过片段"]["manual_excerpt_only"])
+        self.assertFalse(rows["混合来源"]["manual_excerpt_only"])
+        self.assertEqual(rows["混合来源"]["message_count"], 2)
+        self.assertEqual(adapter.mock_calls, [])
+
+    def test_unavailable_desktop_reader_is_an_error_not_an_empty_list(self):
+        service = Service(self.store, FakeAdapter(unavailable=True), "userA")
+        with self.assertRaises(AdapterUnavailable):
+            service.list_chats(source="desktop_ui")
+        # Index reads never depend on the desktop reader.
+        service.save_excerpt("本机标签", "我：只用本机索引")
+        self.assertEqual([x["chat_id"] for x in service.list_chats(source="local_index")["chats"]],
+                         ["本机标签"])
 
 
 if __name__ == "__main__":

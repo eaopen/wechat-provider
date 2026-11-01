@@ -24,3 +24,10 @@ Companion 负责显式点击与隐私告知；Local Bridge 仅通用转发 MCP �
 
 独立 Provider 单元测试覆盖参数限制、账号隔离、重复写入、删除保护，均使用临时 SQLite。
 Companion / Local Bridge / Provider 使用隔离目录与虚构消息完成真实 MCP 流程：状态、保存、重复、列会话、读取、清理。没有访问真实微信索引、正文、权限或登录状态。
+
+## 2026-11-02 修复（本地索引契约）
+
+- **NUL 校验此前实际未生效**：`save_excerpt` / `forget_saved_excerpts` 比较的是两字符转义 `"\\0"`，真实 NUL（`\x00`）会通过校验。现已改为真实 NUL 并补充回归测试；Companion 仍会在调用前拦截，但直接调用 MCP 的客户端不再有缺口。
+- **桌面读取不可用时不再返回空会话列表**：`list_chats(source="desktop_ui")` 遇到 `AdapterUnavailable` 现在抛错，而不是 `chats: []` 加 error 字段。避免调用方把“读不到”误读成“没有会话”，符合“不伪造覆盖范围”的原则。
+- **本机索引列表增加来源信息**：`list_chats(source="local_index")` 每行新增 `manual_excerpt_only` 与 `message_count`，便于 Companion 把“仅用户手动保存的片段”与混合导入的历史区分显示；该字段只是标注，不改变读取范围。
+- 未新增任何微信读取能力：结构化 Reader 未配置、macOS GUI 读取仍保持安全暂停；不触碰登录状态、不重启/重签微信。

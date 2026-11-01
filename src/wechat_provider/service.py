@@ -71,11 +71,12 @@ class Service:
         """
         if (type(chat_title) is not str or type(text) is not str
                 or not chat_title.strip() or not text.strip()
-                or "\\0" in chat_title or "\\0" in text):
+                or "\0" in chat_title or "\0" in text):
             raise ValueError("explicit nonempty chat label and text required")
         title, body = chat_title.strip(), text.strip()
         if len(title.encode("utf-8")) > 200 or len(body.encode("utf-8")) > 7800:
             raise ValueError("selected excerpt exceeds local save limit")
+        # Historical separator kept so pre-fix saved excerpts stay idempotent.
         digest = hashlib.sha256((title+"\\0"+body).encode("utf-8")).hexdigest()
         row = {"chat_id": title, "source_id": "manual:"+digest,
                "text": body, "sender": "用户主动复制的片段",
@@ -89,7 +90,7 @@ class Service:
     def forget_saved_excerpts(self, chat_title: str) -> dict[str, Any]:
         """Remove only user-saved excerpts for this label, not imported history."""
         if (type(chat_title) is not str or not chat_title.strip()
-                or len(chat_title.strip().encode("utf-8")) > 200 or "\\0" in chat_title):
+                or len(chat_title.strip().encode("utf-8")) > 200 or "\0" in chat_title):
             raise ValueError("invalid chat label")
         removed = self.store.delete_manual_excerpts(self.account_key, chat_title.strip())
         return {"removed": removed, "source": "local_index", "chat_title": chat_title.strip(),
@@ -107,12 +108,12 @@ class Service:
             return {"chats": self.store.list_chats(self.account_key, limit),
                     "source": "local_index", "complete": False, "live_read": False,
                     "warning": "Previously indexed/imported chats only; not current WeChat sessions."}
-        try:
-            with desktop_lock(self.lock_path):
-                chats = self.adapter.list_chats(limit)
-            return {"chats": chats, "source": "desktop_ui", "complete": False}
-        except AdapterUnavailable as exc:
-            return {"chats": [], "error": str(exc), "complete": False}
+        # An unavailable desktop reader is an error, never an empty list:
+        # reporting [] would let callers imply coverage/emptiness we do not know.
+        with desktop_lock(self.lock_path):
+            chats = self.adapter.list_chats(limit)
+        return {"chats": chats, "source": "desktop_ui", "id_kind": "display_name",
+                "complete": False, "live_read": False}
 
     def get_messages(self, chat_id: str, limit: int = 50, source: str = "desktop_ui", cursor: str | None = None) -> dict[str, Any]:
         if source == "structured_db":
