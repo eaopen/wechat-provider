@@ -31,3 +31,9 @@ Companion / Local Bridge / Provider 使用隔离目录与虚构消息完成真�
 - **桌面读取不可用时不再返回空会话列表**：`list_chats(source="desktop_ui")` 遇到 `AdapterUnavailable` 现在抛错，而不是 `chats: []` 加 error 字段。避免调用方把“读不到”误读成“没有会话”，符合“不伪造覆盖范围”的原则。
 - **本机索引列表增加来源信息**：`list_chats(source="local_index")` 每行新增 `manual_excerpt_only` 与 `message_count`，便于 Companion 把“仅用户手动保存的片段”与混合导入的历史区分显示；该字段只是标注，不改变读取范围。
 - 未新增任何微信读取能力：结构化 Reader 未配置、macOS GUI 读取仍保持安全暂停；不触碰登录状态、不重启/重签微信。
+
+## 2026-11-02 补充修复（IPC 边界与错误码）
+
+- **IPC 帧上限修正 off-by-one**：`receive()` 现在拒绝超过 `MAX_FRAME` 的帧（恰好 1 MiB 仍可接收），不再接受 1 MiB + 1 字节。
+- **稳定的非反光错误码**：IPC 只回传 `source_access_denied`、`invalid_argument`、`reader_unavailable`、`provider_ipc_failed` 四个码，不回传路径、SQL、正文或异常细节；Companion 据此给出可操作中文提示（参数限制 / 来源暂不可用 / 权限拒绝）。
+- 本轮仍不新增任何微信读取能力，也不改变 Provider 的隐私边界。

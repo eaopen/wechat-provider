@@ -9,18 +9,20 @@ import threading
 import time
 import unittest
 from unittest.mock import patch
-from wechat_provider.local_ipc import handle, send, receive, RemoteService, socket_path
+from wechat_provider.local_ipc import handle, send, receive, RemoteService, socket_path, MAX_FRAME
+from wechat_provider.models import AdapterUnavailable
 
 
 @unittest.skipUnless(os.name == 'posix', 'Unix sockets require POSIX')
 class IPCTest(unittest.TestCase):
-    def exchange(self, request, uid=None):
-        class Service:
-            called = False
-            def status(self):
-                self.called = True
-                return {'installed': True}
-        svc = Service()
+    def exchange(self, request, uid=None, svc=None):
+        if svc is None:
+            class Service:
+                called = False
+                def status(self):
+                    self.called = True
+                    return {'installed': True}
+            svc = Service()
         a, b = socket.socketpair()
         def worker():
             with a:
@@ -37,7 +39,7 @@ class IPCTest(unittest.TestCase):
                 pass  # rejected peer may be disconnected before writing
             response = receive(b)
         t.join(2)
-        return response, svc.called
+        return response, getattr(svc, "called", False)
 
     def test_peer_identity_and_allowlist(self):
         good = {'version': 1, 'method': 'status'}
@@ -48,6 +50,52 @@ class IPCTest(unittest.TestCase):
                          ({**good, 'kwargs': {'command': 'do not run'}}, None)]:
             result, called = self.exchange(req, uid)
             self.assertFalse(result['ok']); self.assertFalse(called)
+
+    def test_frame_limit_is_exact(self):
+        n = MAX_FRAME - len(b'{"a":""}\n')
+        exact = b'{"a":"' + b'x' * n + b'"}\n'
+        big = b'{"a":"' + b'x' * (n + 1) + b'"}\n'
+        self.assertEqual(len(exact), MAX_FRAME)
+        self.assertEqual(len(big), MAX_FRAME + 1)
+        for frame, ok in ((exact, True), (big, False)):
+            a, b = socket.socketpair()
+            def writer(sock=b, data=frame):
+                try:
+                    sock.sendall(data)
+                finally:
+                    sock.close()
+            t = threading.Thread(target=writer); t.start()
+            try:
+                with a:
+                    if ok:
+                        self.assertEqual(receive(a)['a'], 'x' * n)
+                    else:
+                        with self.assertRaises(ValueError):
+                            receive(a)
+            finally:
+                t.join(2)
+
+    def test_error_codes_are_stable_and_non_reflective(self):
+        class Service:
+            def status(self):
+                return {}
+            def save_excerpt(self, chat_title, text):
+                raise ValueError('selected excerpt exceeds local save limit')
+            def get_messages(self, chat_id, limit=10, source='local_index'):
+                raise AdapterUnavailable('structured reader not configured /secret/path')
+            def send_message(self, chat_id, text, idempotency_key=None):
+                raise RuntimeError('token=PRIVATE')
+        svc = Service()
+        cases = [
+            ({'version': 1, 'method': 'save_excerpt', 'args': ['x', 'y']}, 'invalid_argument'),
+            ({'version': 1, 'method': 'get_messages', 'args': ['x']}, 'reader_unavailable'),
+            ({'version': 1, 'method': 'send_message', 'args': ['x', 'y']}, 'provider_ipc_failed'),
+        ]
+        for request, expected in cases:
+            result, _ = self.exchange(request, svc=svc)
+            self.assertFalse(result['ok'])
+            self.assertEqual(result['error'], expected)
+        self.assertNotIn('PRIVATE', json.dumps(cases))
 
     def test_unsafe_directory_rejected(self):
         with tempfile.TemporaryDirectory() as root:

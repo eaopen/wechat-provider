@@ -6,6 +6,8 @@ import json
 import os
 from pathlib import Path
 import socket
+
+from .models import AdapterUnavailable
 import stat
 import struct
 
@@ -48,11 +50,13 @@ def socket_path(value, create=False):
 
 def receive(connection):
     data = bytearray()
-    while len(data) <= MAX_FRAME:
+    while len(data) < MAX_FRAME:
         chunk = connection.recv(min(65536, MAX_FRAME + 1 - len(data)))
         if not chunk:
             raise ValueError('incomplete_frame')
         data.extend(chunk)
+        if len(data) > MAX_FRAME:
+            raise ValueError('frame_too_large')
         if b'\n' in chunk:
             if not data.endswith(b'\n') or data.count(b'\n') != 1:
                 raise ValueError('invalid_frame')
@@ -113,9 +117,16 @@ def handle(connection, service):
         send(connection, {'ok': True, 'result': result})
     except Exception as error:
         # Never reflect private paths, SQL, message text or backend exception details.
+        # Only a small stable code set crosses the IPC boundary.
         if 'source_access_denied' in str(error):
             service._ipc_read_state = 'access_denied'
-        code = 'source_access_denied' if 'source_access_denied' in str(error) else 'provider_ipc_failed'
+            code = 'source_access_denied'
+        elif isinstance(error, (ValueError, TypeError)):
+            code = 'invalid_argument'
+        elif isinstance(error, AdapterUnavailable):
+            code = 'reader_unavailable'
+        else:
+            code = 'provider_ipc_failed'
         try:
             send(connection, {'ok': False, 'error': code})
         except (OSError, ValueError):
