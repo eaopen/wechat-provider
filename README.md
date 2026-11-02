@@ -45,6 +45,27 @@ pip install -e ".[macos]"
 
 以上两种后端均为**可选运行时依赖**，不复制/魔改上游项目。它们可能在部分微信 4.x 版本上失效，届时优先修复对应小型适配器，而非重写整个 Provider。
 
+### macOS 本机无证书运行（Issue #9）
+
+个人本机使用**不需要** Apple Developer ID、Apple Development 或自签证书：
+
+- **默认路径（无 FDA、无 Helper、无证书）**：本机索引、用户已授权的规范化 JSONL 导出、微信合并转发 ZIP 和手动片段，直接通过 `wechat-provider serve`（MCP stdio）或 `daemon` + `proxy` 使用。终端权限成功不代表桌面进程权限相同；缺权限时返回固定错误码，不会自动解密或复制微信数据库。
+- **可选直读已授权微信数据库**：在最终安装目录构建一次固定 ad-hoc Helper（`codesign --force --sign -`，不是证书）。runtime 配置外置，Python/SDK/Reader 更新只改外部配置，不重编 Helper；Bridge 只经同用户 socket 代理访问，不需要 FDA。
+
+```sh
+# 固定安装一次（默认 ad-hoc，无需证书）；不要放进 Bridge 开发构建目录
+python3 macos/build_provider.py \
+  --runtime /absolute/private/helper-runtime.json \
+  --output "$HOME/Applications"
+
+# 仅更新 Python/SDK/Reader 配置：只重写外部 runtime，不重编/重签 Helper
+python3 macos/build_provider.py --configure-only \
+  --runtime /absolute/private/helper-runtime.json \
+  --output "$HOME/Applications"
+```
+
+已安装 App 默认拒绝覆盖，必须显式 `--force`；脚本会警告代码身份变化、TCC 可能需要重新授权，且**不承诺保留 FDA**。由旧版脚本构建、runtime 仍内嵌在 bundle 的 App 需先 `--force` 重建一次，之后才能用 `--configure-only` 更新配置。ad-hoc 模式生成的 LaunchAgent 不含 `AssociatedBundleIdentifiers`（无 Team ID），不能据此假定 launchd/TCC 归属已正确。真实 TCC 归属（C）、Bridge/Python 更新后权限保持（D）、Helper 更新后是否需重授（E）均**未验收**，需要用户单独批准；不要重置 TCC、关闭 SIP、重签微信或重新登录。详见 [macOS 独立 Provider](docs/MACOS_INDEPENDENT_PROVIDER.md)。
+
 ## 本地诊断及 MCP
 
 ```sh
