@@ -66,6 +66,17 @@ class Store:
                     updated_at TEXT NOT NULL,
                     UNIQUE(account_key, idempotency_key)
                 );
+                CREATE TABLE IF NOT EXISTS native_exports (
+                    session_id TEXT PRIMARY KEY,
+                    fingerprint TEXT NOT NULL UNIQUE,
+                    label TEXT NOT NULL,
+                    message_count INTEGER NOT NULL,
+                    participant_count INTEGER NOT NULL,
+                    attachment_count INTEGER NOT NULL,
+                    timezone_offset_minutes INTEGER,
+                    source_zip_name TEXT,
+                    imported_at TEXT NOT NULL
+                );
             """)
             try:
                 db.execute(
@@ -169,19 +180,69 @@ class Store:
         with self._connect() as db:
             rows = db.execute(
                 "SELECT chat_id, MAX(imported_at) AS last_indexed_at, COUNT(*) AS message_count, "
-                "SUM(CASE WHEN source='manual_excerpt' THEN 1 ELSE 0 END) AS manual_count "
+                "SUM(CASE WHEN source='manual_excerpt' THEN 1 ELSE 0 END) AS manual_count, "
+                "SUM(CASE WHEN source='native_share' THEN 1 ELSE 0 END) AS native_count "
                 "FROM messages WHERE account_key=? GROUP BY chat_id ORDER BY MAX(id) DESC LIMIT ?",
                 (account_key, min(max(1, limit), 100)),
             ).fetchall()
-        return [{
-            "chat_id": row["chat_id"],
-            "title": row["chat_id"],
-            "id_kind": "display_name",
-            "last_indexed_at": row["last_indexed_at"],
-            "message_count": row["message_count"],
-            # Honest provenance: only user-saved excerpts vs mixed imported history.
-            "manual_excerpt_only": bool(row["manual_count"]) and row["manual_count"] == row["message_count"],
-        } for row in rows]
+            native_ids = [row["chat_id"] for row in rows if row["native_count"] == row["message_count"]]
+            labels: dict[str, str] = {}
+            if native_ids:
+                marks = ",".join("?" for _ in native_ids)
+                for label_row in db.execute(
+                    f"SELECT session_id, label FROM native_exports WHERE session_id IN ({marks})",
+                    native_ids,
+                ):
+                    labels[label_row["session_id"]] = label_row["label"]
+        chats = []
+        for row in rows:
+            native_only = bool(row["message_count"]) and row["native_count"] == row["message_count"]
+            manual_only = bool(row["message_count"]) and row["manual_count"] == row["message_count"]
+            if native_only:
+                source_kind = "native_share"
+            elif manual_only:
+                source_kind = "manual_excerpt"
+            elif not row["native_count"] and not row["manual_count"]:
+                source_kind = "imported"
+            else:
+                source_kind = "mixed"
+            chats.append({
+                "chat_id": row["chat_id"],
+                "title": ((labels.get(row["chat_id"]) or row["chat_id"])
+                          if native_only else row["chat_id"]),
+                "id_kind": "display_name",
+                "last_indexed_at": row["last_indexed_at"],
+                "message_count": row["message_count"],
+                "source_kind": source_kind,
+                # Honest provenance: only user-saved excerpts vs native shares vs mixed imports.
+                "manual_excerpt_only": manual_only,
+                "native_share_only": native_only,
+            })
+        return chats
+
+    def record_native_export(self, row: dict[str, Any]) -> bool:
+        """Idempotent metadata row in the existing SQLite; never a second index DB."""
+        with self._connect() as db:
+            result = db.execute(
+                """INSERT OR IGNORE INTO native_exports
+                   (session_id, fingerprint, label, message_count, participant_count,
+                    attachment_count, timezone_offset_minutes, source_zip_name, imported_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (row["session_id"], row["fingerprint"], row["label"], row["message_count"],
+                 row["participant_count"], row["attachment_count"],
+                 row.get("timezone_offset_minutes"), row.get("source_zip_name"), utc_now()),
+            )
+            return result.rowcount == 1
+
+    def get_native_export(self, fingerprint: str) -> dict[str, Any] | None:
+        with self._connect() as db:
+            row = db.execute(
+                """SELECT session_id, fingerprint, label, message_count, participant_count,
+                          attachment_count, timezone_offset_minutes, source_zip_name, imported_at
+                   FROM native_exports WHERE fingerprint=?""",
+                (fingerprint,),
+            ).fetchone()
+        return dict(row) if row else None
 
     def get_messages(self, account_key: str, chat_id: str, limit: int = 50) -> list[dict[str, Any]]:
         with self._connect() as db:

@@ -61,6 +61,29 @@ def wechat_forget_saved_excerpts(chat_title: str) -> dict:
 
 
 @mcp.tool()
+def wechat_native_export_preview(grant_token: str,
+                                 timezone_offset_minutes: int | None = None,
+                                 offset: int = 0, limit: int = 200) -> dict:
+    """Bounded preview of a user-selected WeChat merged-forward ZIP.
+
+    The caller never passes a path or bytes: Companion writes a one-time grant
+    file after an explicit user gesture. Without `timezone_offset_minutes`,
+    `sent_at` stays null (the local timestamp is never silently converted).
+    """
+    return service().native_export_preview(grant_token, timezone_offset_minutes, offset, limit)
+
+
+@mcp.tool()
+def wechat_native_export_save(grant_token: str, expected_fingerprint: str) -> dict:
+    """Explicitly import a previewed export into the local index (idempotent).
+
+    `expected_fingerprint` must echo the preview; a changed ZIP is rejected.
+    Attachments stay metadata-only in P0.
+    """
+    return service().native_export_save(grant_token, expected_fingerprint)
+
+
+@mcp.tool()
 def wechat_send_message(chat_id: str, text: str,
                         idempotency_key: str | None = None) -> dict:
     """Submit a message through desktop RPA. Requires user's authorized intent.

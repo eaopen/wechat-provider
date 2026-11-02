@@ -10,10 +10,32 @@ from pathlib import Path
 from typing import Any
 
 from .adapters import native_adapter
+from .greenbubbles_reader import GreenBubblesReader
 from .locks import desktop_lock
 from .models import AdapterUnavailable, WeChatAdapter
+from .native_export import (
+    CONTRACT_VERSION,
+    ERROR_CHANGED,
+    ERROR_INVALID_ARGUMENT,
+    ERROR_LIMIT,
+    ERROR_UNSUPPORTED,
+    FINGERPRINT_RE,
+    GRANT_TTL_SECONDS,
+    MAX_ARCHIVE_BYTES,
+    MAX_MESSAGE_BYTES,
+    MAX_MESSAGES,
+    MAX_OFFSET,
+    MAX_PREVIEW_BYTES,
+    MAX_PREVIEW_MESSAGES,
+    SOURCE_KIND,
+    TOKEN_RE,
+    consume_grant,
+    default_grant_dir,
+    ensure_grant_dir,
+    load_native_export,
+    render_preview,
+)
 from .store import Store
-from .greenbubbles_reader import GreenBubblesReader
 from .wechat_mcp_reader import configured_reader
 
 
@@ -31,12 +53,32 @@ def default_db_path() -> Path:
 
 class Service:
     def __init__(self, store: Store, adapter: WeChatAdapter,
-                 account_key: str = "default", reader=None):
+                 account_key: str = "default", reader=None, grant_dir: Path | None = None):
         self.reader = reader if reader is not None else GreenBubblesReader()
         self.store = store
         self.adapter = adapter
         self.account_key = account_key
         self.lock_path = store.path.with_name("wechat-rpa.lock")
+        self.grant_dir = Path(grant_dir) if grant_dir is not None else default_grant_dir(store.path)
+
+    def native_export_status(self) -> dict[str, Any]:
+        """Capability report; creates/tightens only the Provider's own grant dir."""
+        enabled = True
+        try:
+            ensure_grant_dir(self.grant_dir)
+        except ValueError:
+            enabled = False
+        return {
+            "contract_version": CONTRACT_VERSION,
+            "enabled": enabled,
+            "grant_dir": str(self.grant_dir),
+            "grant_ttl_seconds": GRANT_TTL_SECONDS,
+            "max_archive_bytes": MAX_ARCHIVE_BYTES,
+            "max_messages": MAX_MESSAGES,
+            "max_preview_messages": MAX_PREVIEW_MESSAGES,
+            "max_preview_bytes": MAX_PREVIEW_BYTES,
+            "timezone_offset_required_for_absolute_time": True,
+        }
 
     def status(self) -> dict[str, Any]:
         adapter = self.adapter.status()
@@ -55,12 +97,15 @@ class Service:
             "capabilities": {
                 "local_index_read": True,
                 "manual_excerpt_save": True,
+                "native_export_import": True,
+                "native_export_contract_version": CONTRACT_VERSION,
                 "structured_db_read": reader["available"],
                 "live_read_available": adapter.get("ready_for_attempt", False),
                 "live_read_verified": False,
                 "send_verified": False,
                 "id_kind": "display_name",
             },
+            "native_export": self.native_export_status(),
         }
 
     def save_excerpt(self, chat_title: str, text: str) -> dict[str, Any]:
@@ -95,6 +140,94 @@ class Service:
         removed = self.store.delete_manual_excerpts(self.account_key, chat_title.strip())
         return {"removed": removed, "source": "local_index", "chat_title": chat_title.strip(),
                 "manual_excerpt_only": True}
+
+    def preview_native_export(self, grant_token: str,
+                              timezone_offset_minutes: int | None = None,
+                              offset: int = 0, limit: int = MAX_PREVIEW_MESSAGES) -> dict[str, Any]:
+        """Bounded preview of a user-selected merged-forward ZIP (no persistence)."""
+        if type(grant_token) is not str or not TOKEN_RE.fullmatch(grant_token):
+            raise ValueError(ERROR_INVALID_ARGUMENT)
+        if timezone_offset_minutes is not None and (
+                type(timezone_offset_minutes) is not int
+                or not -840 <= timezone_offset_minutes <= 840):
+            raise ValueError(ERROR_INVALID_ARGUMENT)
+        if type(offset) is not int or not 0 <= offset <= MAX_OFFSET:
+            raise ValueError(ERROR_INVALID_ARGUMENT)
+        if type(limit) is not int or not 1 <= limit <= MAX_PREVIEW_MESSAGES:
+            raise ValueError(ERROR_INVALID_ARGUMENT)
+        if offset + limit > MAX_MESSAGES:
+            raise ValueError(ERROR_INVALID_ARGUMENT)
+        zip_path = consume_grant(self.grant_dir, grant_token, "preview")
+        export = load_native_export(zip_path)
+        if offset > len(export.records):
+            raise ValueError(ERROR_INVALID_ARGUMENT)
+        if any(len(record.text.encode("utf-8")) > MAX_MESSAGE_BYTES for record in export.records):
+            raise ValueError(ERROR_LIMIT)
+        already_saved = self.store.get_native_export(export.fingerprint) is not None
+        return render_preview(
+            export,
+            timezone_offset_minutes=timezone_offset_minutes,
+            offset=offset,
+            limit=limit,
+            already_saved=already_saved,
+        )
+
+    def save_native_export(self, grant_token: str, expected_fingerprint: str) -> dict[str, Any]:
+        """Explicitly import a previewed export into the existing Provider index."""
+        if type(grant_token) is not str or not TOKEN_RE.fullmatch(grant_token):
+            raise ValueError(ERROR_INVALID_ARGUMENT)
+        if type(expected_fingerprint) is not str or not FINGERPRINT_RE.fullmatch(expected_fingerprint):
+            raise ValueError(ERROR_INVALID_ARGUMENT)
+        zip_path = consume_grant(self.grant_dir, grant_token, "save")
+        export = load_native_export(zip_path)
+        if export.fingerprint != expected_fingerprint:
+            # TOCTOU guard: the archive changed after preview; import nothing.
+            raise ValueError(ERROR_CHANGED)
+        already_recorded = self.store.get_native_export(export.fingerprint) is not None
+        rows = [{
+            "chat_id": export.session_id,
+            "source_id": record.source_id,
+            "text": record.text,
+            "sender": record.sender,
+            # P0 save carries no timezone offset, so no absolute timestamp is invented.
+            "sent_at": None,
+            "source": SOURCE_KIND,
+        } for record in export.records]
+        result = self.store.import_messages(self.account_key, rows)
+        # Only claim "already imported" when this account really gained nothing new.
+        already_imported = already_recorded and result["imported"] == 0
+        self.store.record_native_export({
+            "session_id": export.session_id,
+            "fingerprint": export.fingerprint,
+            "label": export.label,
+            "message_count": len(export.records),
+            "participant_count": len(export.participants),
+            "attachment_count": len(export.attachments),
+            "timezone_offset_minutes": None,
+            "source_zip_name": export.archive_name,
+        })
+        return {
+            "ok": True,
+            "saved": True,
+            "source": SOURCE_KIND,
+            "session_id": export.session_id,
+            "fingerprint": export.fingerprint,
+            "imported": result["imported"],
+            "duplicates": result["duplicates"],
+            "already_imported": already_imported,
+            "message_count": len(export.records),
+            "attachment_count": len(export.attachments),
+            "live_read": False,
+            "complete": False,
+        }
+
+    def archive_native_export(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        """Reserved for P1.5 (Markdown/attachment export); not implemented in P0."""
+        raise ValueError(ERROR_UNSUPPORTED)
+
+    # IPC whitelist names (``local_ipc.METHODS``) are the stable transport surface.
+    native_export_preview = preview_native_export
+    native_export_save = save_native_export
 
     def list_chats(self, limit: int = 30, source: str = "desktop_ui", cursor: str | None = None) -> dict[str, Any]:
         if source == "structured_db":

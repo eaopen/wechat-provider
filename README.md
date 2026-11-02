@@ -8,7 +8,7 @@
 
 | 功能 | 当前状态 |
 | --- | --- |
-| MCP stdio 8 个工具（含用户主动保存/移除的本地片段） | ✅ 已实现 |
+| MCP stdio 10 个工具（含用户主动保存/移除的本地片段、微信合并转发 ZIP 原生导入） | ✅ 已实现 |
 | 本地 SQLite / FTS5 文本索引 | ✅ 已实现；仅检索已读/导入的数据 |
 | 发送任务记账 / 幂等键 / 单机 GUI 锁 | ✅ 已实现；RPA 调用在隔离子进程中，不污染 MCP stdio；不声称成功送达 |
 | Windows 4.x GUI 适配 | 🔶 对接 [pyweixin](https://github.com/Hello-Mr-Crab/pywechat)；需实机验证 |
@@ -54,7 +54,7 @@ wechat-provider serve
 
 `serve` 使用 MCP **stdio** 传输，适用于 Codex、Claude Code 等支持外部本地 MCP 的客户端。请把 MCP 客户端配置为调用当前虚拟环境中的 `wechat-provider serve`，不是 HTTP 接口。没有后台驻留/开放监听端口的要求。
 
-提供八个工具：
+提供十个工具：
 
 - `wechat_status`
 - `wechat_list_chats(limit, source="desktop_ui")`
@@ -64,6 +64,8 @@ wechat-provider serve
 - `wechat_get_send_status(task_id)`
 - wechat_save_excerpt(chat_title, text)：仅显式点击后把用户复制的文字写入 Provider 自有 SQLite 索引
 - wechat_forget_saved_excerpts(chat_title)：只移除此名称下手动保存的片段，不删除微信数据或其他来源导入记录
+- `wechat_native_export_preview(grant_token, timezone_offset_minutes?, offset?, limit?)`：校验一次性授权文件后，有界预览用户选择的微信合并转发 ZIP（不持久化聊天内容）
+- `wechat_native_export_save(grant_token, expected_fingerprint)`：用户显式点击后幂等写入本机索引（`source=native_share`）；指纹不符则不导入
 
 ## 使用边界
 
@@ -148,3 +150,22 @@ wechat_status.capabilities.manual_excerpt_save=true 表示支持这个明确的�
 创建、读取、删除均须前台用户动作或用户自行授权的 MCP 客户端调用。
 工具正文是本地 MCP JSON 参数，不应放入命令行或诊断日志。
 详情见 docs/COMPANION_LOCAL_EXCERPTS.md。
+
+## 微信合并转发 ZIP 原生导入（P0）
+
+用户在 Companion 里明确选择一个微信「合并转发」导出的 `.zip` 后，Companion 会向 Provider 数据目录
+写入**一次性授权文件**，再调用 `wechat_native_export_preview` 得到有界预览；用户勾选范围后交给 Agent
+（仍由用户触发）。只有用户再次点击保存时，才会通过 `wechat_native_export_save` 把整份导出幂等写入
+Provider 自有 SQLite（`messages.source = "native_share"` + 同库 `native_exports` 元数据表）。
+
+- MCP 工具**从不接受文件路径或文件字节**，网页/Agent 无法借此读取任意本地文件；授权文件 0600、
+  TTL 600 秒、使用一次即删除。
+- ZIP 校验 fail closed：24 MiB / 2000 条目 / 256 MiB 解压总量 / 32 MiB 单条目 / 压缩比 200 /
+  路径 512 字节；拒绝路径穿越、绝对路径、符号链接、加密、不支持压缩方法、ZIP64、多分卷、重名、
+  控制字符与坏 CRC。原文件绝不移动/改名/删除。
+- 时区不静默转换：只有显式 `timezone_offset_minutes` 才产生带偏移的 `sent_at`；否则只保留本地时间并告警。
+- 附件 P0 仅为元数据（不提取、不落盘）。保存的 `sent_at` 在 P0 为 `NULL`（保存调用按合约不带时区）。
+- 只验证微信 macOS 合并转发 TXT 格式；**合成 ZIP 不等于真实微信分享已验证**，也不读取微信数据库、
+  登录状态或权限。
+
+详情（限制、字段、错误码、身份规则、CLI/验收）：[微信合并转发 ZIP 原生导入](docs/NATIVE_EXPORT_IMPORT.md)。
