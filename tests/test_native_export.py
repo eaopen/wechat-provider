@@ -47,6 +47,10 @@ class AdapterStub:
         return {"ready_for_attempt": False, "platform": "synthetic"}
 
 
+@unittest.skipUnless(
+    os.name == "posix",
+    "native-share ZIP import is enabled/verified on POSIX only (Windows unverified)",
+)
 class NativeExportBase(unittest.TestCase):
     def setUp(self):
         self._temp = tempfile.TemporaryDirectory()

@@ -27,6 +27,8 @@ from .native_export import (
     MAX_OFFSET,
     MAX_PREVIEW_BYTES,
     MAX_PREVIEW_MESSAGES,
+    PLATFORM_SUPPORT,
+    PLATFORM_SUPPORTED,
     SOURCE_KIND,
     TOKEN_RE,
     consume_grant,
@@ -63,14 +65,16 @@ class Service:
 
     def native_export_status(self) -> dict[str, Any]:
         """Capability report; creates/tightens only the Provider's own grant dir."""
-        enabled = True
-        try:
-            ensure_grant_dir(self.grant_dir)
-        except ValueError:
-            enabled = False
+        enabled = bool(PLATFORM_SUPPORTED)
+        if enabled:
+            try:
+                ensure_grant_dir(self.grant_dir)
+            except ValueError:
+                enabled = False
         return {
             "contract_version": CONTRACT_VERSION,
             "enabled": enabled,
+            "platform_support": PLATFORM_SUPPORT,
             "grant_dir": str(self.grant_dir),
             "grant_ttl_seconds": GRANT_TTL_SECONDS,
             "max_archive_bytes": MAX_ARCHIVE_BYTES,
@@ -145,6 +149,8 @@ class Service:
                               timezone_offset_minutes: int | None = None,
                               offset: int = 0, limit: int = MAX_PREVIEW_MESSAGES) -> dict[str, Any]:
         """Bounded preview of a user-selected merged-forward ZIP (no persistence)."""
+        if not PLATFORM_SUPPORTED:
+            raise ValueError(ERROR_UNSUPPORTED)
         if type(grant_token) is not str or not TOKEN_RE.fullmatch(grant_token):
             raise ValueError(ERROR_INVALID_ARGUMENT)
         if timezone_offset_minutes is not None and (
@@ -174,6 +180,8 @@ class Service:
 
     def save_native_export(self, grant_token: str, expected_fingerprint: str) -> dict[str, Any]:
         """Explicitly import a previewed export into the existing Provider index."""
+        if not PLATFORM_SUPPORTED:
+            raise ValueError(ERROR_UNSUPPORTED)
         if type(grant_token) is not str or not TOKEN_RE.fullmatch(grant_token):
             raise ValueError(ERROR_INVALID_ARGUMENT)
         if type(expected_fingerprint) is not str or not FINGERPRINT_RE.fullmatch(expected_fingerprint):

@@ -31,6 +31,10 @@ from typing import Any
 
 CONTRACT_VERSION = 1
 SOURCE_KIND = "native_share"
+# P0 is verified on POSIX (macOS first). Windows stays explicitly unverified and
+# is disabled instead of pretending the same file-permission contract holds.
+PLATFORM_SUPPORTED = os.name == "posix"
+PLATFORM_SUPPORT = "posix_verified_macos" if PLATFORM_SUPPORTED else "not_verified_on_this_platform"
 GRANT_DIR_NAME = "native-export-grants"
 GRANT_TTL_SECONDS = 600
 MAX_GRANT_BYTES = 2048
@@ -96,6 +100,16 @@ def _owner_ok(info: os.stat_result) -> bool:
     return uid is None or info.st_uid == uid
 
 
+def _same_user(info: os.stat_result) -> bool:
+    """Owner check only where POSIX uids exist; Windows uid semantics are not faked."""
+    return not hasattr(os, "getuid") or info.st_uid == os.getuid()
+
+
+def _private_mode(info: os.stat_result) -> bool:
+    """No group/other bits where POSIX modes exist; Windows ACLs are not guessed."""
+    return os.name != "posix" or not (stat.S_IMODE(info.st_mode) & 0o077)
+
+
 def _clean_text(value: str) -> str:
     """Drop control characters, never return NUL; used only for display labels."""
     return "".join(ch for ch in value if ch == "\n" or (ord(ch) >= 0x20 and ord(ch) != 0x7F))
@@ -147,7 +161,7 @@ def ensure_grant_dir(value: Path) -> Path:
             info = path.lstat()
         except OSError:
             raise ValueError(ERROR_GRANT_INVALID) from None
-        if stat.S_IMODE(info.st_mode) & 0o077:
+        if not _private_mode(info):
             raise ValueError(ERROR_GRANT_INVALID)
     return path
 

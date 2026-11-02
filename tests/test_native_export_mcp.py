@@ -14,8 +14,12 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
+try:  # CI's minimal matrix does not install the optional MCP client dependency.
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+except ImportError:  # pragma: no cover - environment-dependent
+    ClientSession = StdioServerParameters = None
+    stdio_client = None
 
 from wechat_provider.native_export import mint_grant
 from wechat_provider.store import Store
@@ -53,6 +57,7 @@ def payload(result):
     return json.loads(result.content[0].text), ""
 
 
+@unittest.skipUnless(stdio_client is not None, "MCP client dependency not installed")
 class NativeExportMcpStdioTest(unittest.TestCase):
     def setUp(self):
         self._temp = tempfile.TemporaryDirectory()
