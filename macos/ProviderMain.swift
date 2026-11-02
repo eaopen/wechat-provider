@@ -88,9 +88,9 @@ do {
     guard runtime.python.hasPrefix("/"), runtime.socket.hasPrefix("/"),
           !runtime.python.contains("\0"), !runtime.socket.contains("\0") else { exit(2) }
     guard Set(runtime.environment.keys).isSubset(of: allowedEnvironment) else { exit(2) }
-    for (key, value) in runtime.environment where pathEnvironment.contains(key) {
-        if !value.isEmpty && !value.hasPrefix("/") { exit(2) }
+    for (key, value) in runtime.environment {
         if value.contains("\0") { exit(2) }
+        if pathEnvironment.contains(key) && !value.isEmpty && !value.hasPrefix("/") { exit(2) }
     }
     try runDaemon(runtime)
 } catch {

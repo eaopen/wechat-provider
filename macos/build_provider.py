@@ -207,6 +207,14 @@ def build(runtime: dict, output: Path, *, sign: str | None = None,
     if not output_path.is_dir():
         raise BuildError(f"output path is not a directory: {output_path}")
     app = _absolute(output_path / APP_NAME)
+    stale_backup = output_path / f".{APP_NAME}.previous"
+    if not app.exists() and stale_backup.exists() and not stale_backup.is_symlink():
+        # A previous build was interrupted after moving the old bundle aside;
+        # recover it instead of silently deleting the only remaining copy.
+        try:
+            os.replace(stale_backup, app)
+        except OSError:
+            pass
     if app.exists() and not app.is_dir():
         raise BuildError(f"app path exists but is not a bundle directory: {app}")
     if app.exists() and not force:
@@ -330,11 +338,15 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--force", action="store_true",
                         help="Allow replacing an existing app (changes code identity; may require "
                              "granting file access again)")
-    parser.add_argument("--swiftc", default="swiftc")
-    parser.add_argument("--codesign", default="codesign")
+    parser.add_argument("--swiftc", default=None,
+                        help="Override swiftc path for a build (not used by --configure-only)")
+    parser.add_argument("--codesign", default=None,
+                        help="Override codesign path for a build (not used by --configure-only)")
     args = parser.parse_args(argv)
-    if args.configure_only and (args.sign is not None or args.force):
-        parser.error("--sign and --force only apply to a build; remove them with --configure-only")
+    if args.configure_only and (args.sign is not None or args.force
+                                or args.swiftc is not None or args.codesign is not None):
+        parser.error("--sign, --force, --swiftc and --codesign only apply to a build; "
+                     "remove them with --configure-only")
     try:
         runtime = load_runtime(args.runtime)
         if args.configure_only:
@@ -342,7 +354,8 @@ def main(argv: list[str] | None = None) -> None:
         else:
             summary = build(runtime, args.output, sign=args.sign,
                             runtime_path=args.runtime_path, force=args.force,
-                            swiftc=args.swiftc, codesign=args.codesign)
+                            swiftc=args.swiftc or "swiftc",
+                            codesign=args.codesign or "codesign")
     except BuildError as error:
         parser.error(str(error))
     except OSError as error:

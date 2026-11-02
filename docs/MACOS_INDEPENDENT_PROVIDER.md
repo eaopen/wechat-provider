@@ -28,7 +28,7 @@ A 路径 MCP 客户端
 ```
 
 - `proxy` 只连接已存在的同用户服务，不执行读取、不启动 daemon/Reader，失败时不回退为 Bridge 直接读库。
-- Socket 父目录必须归当前用户所有且仅属主可访问（`0700`，不满足则拒绝），socket 为 `0600`，拒绝符号链接祖先；双向用操作系统 peer UID 验证。同一 OS 用户是授权边界，不对同用户恶意进程提供额外隔离。
+- Socket 父目录必须归当前用户所有且仅属主可访问（不满足则拒绝；daemon 新建时为 `0700`），socket 为 `0600`，拒绝符号链接祖先；双向用操作系统 peer UID 验证。同一 OS 用户是授权边界，不对同用户恶意进程提供额外隔离。
 - IPC 只接受固定的 MCP 方法白名单（当前 10 个既有工具方法），参数绑定既有方法签名；**不接受命令、环境变量、数据库路径等覆盖参数**。每帧最多 1 MiB、60 秒超时，串行服务，不新增发送队列、不自动重试发送；进程崩溃后由独占锁保护清理旧 socket。
 - Helper 只从外部 runtime 配置读取固定的 `python`、`socket` 和环境变量白名单，启动命令固定为 `python -m wechat_provider.cli daemon --socket ...`；IPC 请求无法改变它。
 
@@ -91,7 +91,7 @@ python3 macos/build_provider.py \
 
 ### 4.2 已安装 App 的覆盖保护
 
-若 `$HOME/Applications/WeChat Provider.app` 已存在，脚本**默认拒绝覆盖或原地重签**，必须显式 `--force`。脚本会警告：新 Helper 的代码身份/CDHash 会变化，macOS 可能要求重新授权 TCC，**不承诺原有 FDA 保留**。因此：
+若 `$HOME/Applications/WeChat Provider.app` 已存在，脚本**默认拒绝覆盖或原地重签**，必须显式 `--force`。`--force` 会先在输出目录的 staging 目录完成编译、签名和 runtime 校验，成功后才把旧 App 移到 `.previous` 备份并换入新 App；编译、签名或配置写入失败时自动恢复旧 App，旧 LaunchAgent/配置不会被指向一个缺失的 Helper。脚本会警告：新 Helper 的代码身份/CDHash 会变化，macOS 可能要求重新授权 TCC，**不承诺原有 FDA 保留**。因此：
 
 - 只更新 Python/SDK/Reader 配置时，**不要重建 Helper**，改用 §4.3 的 `--configure-only`。
 - 只有 Helper 本身需要升级时才使用 `--force`，并按 E 项重新验收权限：

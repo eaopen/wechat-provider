@@ -193,6 +193,40 @@ class BuildShapesTest(unittest.TestCase):
         self.assertTrue(marker.is_file())  # previous bundle restored, not destroyed
         self.assertEqual(hashlib.sha256(helper.read_bytes()).hexdigest(), before)
 
+    def test_interrupted_previous_bundle_is_recovered_not_deleted(self):
+        previous = self.output / f".{build_provider.APP_NAME}.previous"
+        (previous / "Contents").mkdir(parents=True)
+        (previous / "Contents" / "marker").write_text("recovered bundle")
+        # A recovered bundle is an existing app: it must not be silently rebuilt.
+        with self.assertRaisesRegex(BuildError, "refusing to overwrite or re-sign"):
+            self.build()
+        self.assertEqual(self.fake.commands, [])
+        restored = self.output / build_provider.APP_NAME / "Contents" / "marker"
+        self.assertTrue(restored.is_file())
+        self.assertFalse(previous.exists())
+
+    def test_failed_launch_agent_write_restores_previous_app(self):
+        self.build()
+        app = self.output / build_provider.APP_NAME
+        helper = app / "Contents" / "MacOS" / build_provider.EXECUTABLE_NAME
+        before = hashlib.sha256(helper.read_bytes()).hexdigest()
+        marker = app / "Contents" / "keep-marker"
+        marker.write_text("previous app must be restored")
+        original_write = Path.write_bytes
+
+        def flaky(path, data):
+            if path.name == f"{build_provider.BUNDLE_IDENTIFIER}.plist":
+                raise OSError(28, "No space left on device")
+            return original_write(path, data)
+
+        with patch.object(Path, "write_bytes", flaky):
+            with self.assertRaisesRegex(BuildError, "build failed while writing files"):
+                self.build(force=True)
+        self.assertTrue(marker.is_file())
+        self.assertEqual(hashlib.sha256(helper.read_bytes()).hexdigest(), before)
+        self.assertFalse((self.output / f".{build_provider.APP_NAME}.previous").exists())
+        self.assertEqual(list(self.output.glob(".wechat-provider-build-*")), [])
+
     def test_output_path_that_is_a_file_reports_build_error(self):
         self.output.write_text("not a directory")
         with self.assertRaisesRegex(BuildError, "cannot create output directory"):
@@ -202,12 +236,14 @@ class BuildShapesTest(unittest.TestCase):
     def test_configure_only_rejects_build_only_flags(self):
         runtime_file = self.root / "runtime.json"
         runtime_file.write_text(json.dumps(valid_runtime(self.root)))
-        with contextlib.redirect_stderr(io.StringIO()) as stderr:
-            with self.assertRaises(SystemExit) as caught:
-                build_provider.main(["--runtime", str(runtime_file), "--output",
-                                     str(self.output), "--configure-only", "--force"])
-        self.assertEqual(caught.exception.code, 2)
-        self.assertIn("--sign and --force", stderr.getvalue())
+        for extra in (["--force"], ["--sign", "Some Identity"],
+                      ["--swiftc", "/nonexistent/swiftc"]):
+            with contextlib.redirect_stderr(io.StringIO()) as stderr:
+                with self.assertRaises(SystemExit) as caught:
+                    build_provider.main(["--runtime", str(runtime_file), "--output",
+                                         str(self.output), "--configure-only", *extra])
+            self.assertEqual(caught.exception.code, 2)
+            self.assertIn("only apply to a build", stderr.getvalue())
 
     def test_configure_output_does_not_claim_a_launch_agent(self):
         self.build()
@@ -330,6 +366,13 @@ class NoCertificateRequirementTest(unittest.TestCase):
             runtime_path.write_text(json.dumps({
                 "python": str(fake_python), "socket": str(socket),
                 "environment": {"DYLD_INSERT_LIBRARIES": "/tmp/injected.dylib"}}))
+            runtime_path.chmod(0o600)
+            self.assertEqual(subprocess.run([str(helper)], capture_output=True,
+                                            timeout=15).returncode, 2)
+            # NUL must be rejected for every allowlisted value, not only path keys.
+            runtime_path.write_text(json.dumps({
+                "python": str(fake_python), "socket": str(socket),
+                "environment": {"WECHAT_PROVIDER_ACCOUNT": "bad\u0000value"}}))
             runtime_path.chmod(0o600)
             self.assertEqual(subprocess.run([str(helper)], capture_output=True,
                                             timeout=15).returncode, 2)
