@@ -7,8 +7,10 @@ and ad-hoc signs into a temporary directory (no certificate identity involved).
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import plistlib
@@ -164,6 +166,60 @@ class BuildShapesTest(unittest.TestCase):
         self.assertEqual(json.loads(self.runtime_path.read_text())["environment"],
                          new_runtime["environment"])
 
+    def test_failed_force_rebuild_keeps_existing_app(self):
+        self.build()
+        app = self.output / build_provider.APP_NAME
+        helper = app / "Contents" / "MacOS" / build_provider.EXECUTABLE_NAME
+        before = hashlib.sha256(helper.read_bytes()).hexdigest()
+        marker = app / "Contents" / "keep-marker"
+        marker.write_text("old helper must survive a failed --force rebuild")
+
+        def failing(command, check=False, capture_output=True, text=True):
+            self.fake.commands.append(list(command))
+            if command[0] == "fake-codesign" and "--sign" in command:
+                return subprocess.CompletedProcess(
+                    command, 1, stdout="", stderr="simulated signing failure")
+            if command[0] == "fake-swiftc":
+                target = Path(command[command.index("-o") + 1])
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b"new-helper")
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+        with patch.object(build_provider.subprocess, "run", failing):
+            with self.assertRaisesRegex(BuildError, "command failed"):
+                build_provider.build(valid_runtime(self.root), self.output, force=True,
+                                     swiftc="fake-swiftc", codesign="fake-codesign",
+                                     runtime_path=self.runtime_path)
+        self.assertTrue(marker.is_file())  # previous bundle restored, not destroyed
+        self.assertEqual(hashlib.sha256(helper.read_bytes()).hexdigest(), before)
+
+    def test_output_path_that_is_a_file_reports_build_error(self):
+        self.output.write_text("not a directory")
+        with self.assertRaisesRegex(BuildError, "cannot create output directory"):
+            self.build()
+        self.assertEqual(self.fake.commands, [])
+
+    def test_configure_only_rejects_build_only_flags(self):
+        runtime_file = self.root / "runtime.json"
+        runtime_file.write_text(json.dumps(valid_runtime(self.root)))
+        with contextlib.redirect_stderr(io.StringIO()) as stderr:
+            with self.assertRaises(SystemExit) as caught:
+                build_provider.main(["--runtime", str(runtime_file), "--output",
+                                     str(self.output), "--configure-only", "--force"])
+        self.assertEqual(caught.exception.code, 2)
+        self.assertIn("--sign and --force", stderr.getvalue())
+
+    def test_configure_output_does_not_claim_a_launch_agent(self):
+        self.build()
+        runtime_file = self.root / "runtime.json"
+        runtime_file.write_text(json.dumps(valid_runtime(self.root)))
+        with contextlib.redirect_stdout(io.StringIO()) as stdout:
+            build_provider.main(["--runtime", str(runtime_file), "--output",
+                                 str(self.output), "--configure-only"])
+        output = stdout.getvalue()
+        self.assertIn("were not touched", output)
+        self.assertNotIn("Review the generated LaunchAgent", output)
+
     def test_configure_requires_installed_app(self):
         with self.assertRaisesRegex(BuildError, "not found; build it once"):
             build_provider.configure(valid_runtime(self.root), self.output)
@@ -256,6 +312,27 @@ class NoCertificateRequirementTest(unittest.TestCase):
             # Replacing an existing helper requires an explicit new identity decision.
             with self.assertRaisesRegex(BuildError, "refusing to overwrite or re-sign"):
                 build_provider.build(runtime, output, runtime_path=runtime_path)
+            # Positive control: the custom Info.plist path is used and the daemon
+            # command is fixed (fake Python records its argv and exits 0).
+            argv_file = root / "helper-argv.txt"
+            fake_python = root / "fake-python"
+            fake_python.write_text(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + str(argv_file) + "\n")
+            fake_python.chmod(0o755)
+            control = {"python": str(fake_python), "socket": str(socket),
+                       "environment": {"WECHAT_PROVIDER_READER": "unconfigured"}}
+            build_provider.write_runtime(runtime_path, control)
+            completed = subprocess.run([str(helper)], capture_output=True, timeout=15)
+            self.assertEqual(completed.returncode, 0)
+            self.assertEqual(argv_file.read_text().splitlines(),
+                             ["-m", "wechat_provider.cli", "daemon", "--socket", str(socket)])
+            # The helper itself also rejects environment keys outside the allowlist.
+            runtime_path.write_text(json.dumps({
+                "python": str(fake_python), "socket": str(socket),
+                "environment": {"DYLD_INSERT_LIBRARIES": "/tmp/injected.dylib"}}))
+            runtime_path.chmod(0o600)
+            self.assertEqual(subprocess.run([str(helper)], capture_output=True,
+                                            timeout=15).returncode, 2)
             # Helper refuses unsafe external config before starting any daemon.
             runtime_path.chmod(0o644)
             rejected = subprocess.run([str(helper)], capture_output=True)

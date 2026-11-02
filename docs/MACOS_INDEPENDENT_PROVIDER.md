@@ -28,7 +28,7 @@ A 路径 MCP 客户端
 ```
 
 - `proxy` 只连接已存在的同用户服务，不执行读取、不启动 daemon/Reader，失败时不回退为 Bridge 直接读库。
-- Socket 父目录必须归当前用户所有且为 `0700`，socket 为 `0600`，拒绝符号链接祖先；双向用操作系统 peer UID 验证。同一 OS 用户是授权边界，不对同用户恶意进程提供额外隔离。
+- Socket 父目录必须归当前用户所有且仅属主可访问（`0700`，不满足则拒绝），socket 为 `0600`，拒绝符号链接祖先；双向用操作系统 peer UID 验证。同一 OS 用户是授权边界，不对同用户恶意进程提供额外隔离。
 - IPC 只接受固定的 MCP 方法白名单（当前 10 个既有工具方法），参数绑定既有方法签名；**不接受命令、环境变量、数据库路径等覆盖参数**。每帧最多 1 MiB、60 秒超时，串行服务，不新增发送队列、不自动重试发送；进程崩溃后由独占锁保护清理旧 socket。
 - Helper 只从外部 runtime 配置读取固定的 `python`、`socket` 和环境变量白名单，启动命令固定为 `python -m wechat_provider.cli daemon --socket ...`；IPC 请求无法改变它。
 
@@ -69,7 +69,7 @@ python3 macos/build_provider.py \
 ```
 
 - 默认模式对 `WeChat Provider.app` 做 ad-hoc 签名（`codesign --force --sign -`），**不需要任何证书**。只有未来分发才需要 `--sign 'Developer ID Application: ...'`。
-- 运行时配置**外置**：默认 `~/Library/Application Support/wechat-provider/helper/runtime.json`（目录 `0700`、文件 `0600`）。构建时把外部路径写入 Info.plist 的 `WCProviderRuntimePath`，Helper 启动时读取该路径（缺失时回退默认路径）。`--runtime-path /absolute/outside-bundle/runtime.json` 可覆盖外部位置，必须是绝对路径且位于 app bundle 之外。
+- 运行时配置**外置**：默认 `~/Library/Application Support/wechat-provider/helper/runtime.json`（目录 `0700`、文件 `0600`）。构建时把外部路径写入 Info.plist 的 `WCProviderRuntimePath`，Helper 启动时读取该路径（仅当 Info.plist 缺少该键时才回退默认路径；键存在但文件缺失/不安全时直接失败退出）。`--runtime-path /absolute/outside-bundle/runtime.json` 可覆盖外部位置，必须是绝对路径且位于 app bundle 之外。
 - runtime JSON 示例（**不含密钥本身**；`python`、`socket` 必须是绝对路径，环境变量仅限白名单）：
 
 ```json

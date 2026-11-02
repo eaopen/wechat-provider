@@ -13,6 +13,18 @@ struct Runtime: Decodable {
 }
 
 let runtimePathKey = "WCProviderRuntimePath"
+// Mirror the build script's allowlist: the helper forwards only fixed provider
+// settings to the daemon, even if the external config is hand-edited.
+let allowedEnvironment: Set<String> = [
+    "WECHAT_PROVIDER_READER", "WECHAT_PROVIDER_WM_PYTHON", "WECHAT_PROVIDER_WM_STATE_DIR",
+    "WECHAT_PROVIDER_WM_SOURCE_ID", "WECHAT_PROVIDER_GB_EXECUTABLE",
+    "WECHAT_PROVIDER_GB_PROFILE", "WECHAT_PROVIDER_GB_SOURCE_ID", "WECHAT_PROVIDER_DB",
+    "WECHAT_PROVIDER_ACCOUNT",
+]
+let pathEnvironment: Set<String> = [
+    "WECHAT_PROVIDER_WM_PYTHON", "WECHAT_PROVIDER_WM_STATE_DIR",
+    "WECHAT_PROVIDER_GB_EXECUTABLE", "WECHAT_PROVIDER_DB",
+]
 
 func configurationURL() -> URL {
     if let configured = Bundle.main.object(forInfoDictionaryKey: runtimePathKey) as? String,
@@ -75,6 +87,11 @@ do {
     let runtime = try JSONDecoder().decode(Runtime.self, from: Data(contentsOf: url))
     guard runtime.python.hasPrefix("/"), runtime.socket.hasPrefix("/"),
           !runtime.python.contains("\0"), !runtime.socket.contains("\0") else { exit(2) }
+    guard Set(runtime.environment.keys).isSubset(of: allowedEnvironment) else { exit(2) }
+    for (key, value) in runtime.environment where pathEnvironment.contains(key) {
+        if !value.isEmpty && !value.hasPrefix("/") { exit(2) }
+        if value.contains("\0") { exit(2) }
+    }
     try runDaemon(runtime)
 } catch {
     exit(2)

@@ -67,15 +67,19 @@ def _absolute(value: Path) -> Path:
 
 
 def _private_directory(directory: Path) -> None:
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if directory.is_symlink() or not directory.is_dir():
-        raise BuildError(f"runtime config directory is not a real directory: {directory}")
-    if hasattr(os, "getuid"):  # POSIX only; the helper itself is macOS-only.
-        info = directory.stat()
-        if info.st_uid != os.getuid():
-            raise BuildError(f"runtime config directory is not owned by the current user: {directory}")
-        if info.st_mode & 0o077:
-            directory.chmod(0o700)
+    try:
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if directory.is_symlink() or not directory.is_dir():
+            raise BuildError(f"runtime config directory is not a real directory: {directory}")
+        if hasattr(os, "getuid"):  # POSIX only; the helper itself is macOS-only.
+            info = directory.stat()
+            if info.st_uid != os.getuid():
+                raise BuildError(
+                    f"runtime config directory is not owned by the current user: {directory}")
+            if info.st_mode & 0o077:
+                directory.chmod(0o700)
+    except OSError as error:
+        raise BuildError(f"cannot prepare private runtime directory: {error}") from error
 
 
 def validate_runtime(runtime: object) -> dict:
@@ -132,6 +136,15 @@ def write_runtime(runtime_path: Path, runtime: dict) -> Path:
             os.fsync(handle.fileno())
         os.chmod(temporary, 0o600)
         os.replace(temporary, path)
+        if hasattr(os, "O_DIRECTORY"):  # best-effort durability of the rename
+            try:
+                directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+            except OSError:
+                pass
     finally:
         try:
             os.unlink(temporary)
@@ -151,16 +164,49 @@ def _run(command: list[str]) -> subprocess.CompletedProcess:
     return completed
 
 
+def _compile_bundle(app: Path, config_path: Path, *, sign: str | None, swiftc: str,
+                    codesign: str, source: Path | None) -> None:
+    """Compile and sign one fresh bundle; no install/enable/TCC side effects."""
+    contents = app / "Contents"
+    (contents / "MacOS").mkdir(parents=True)
+    (contents / "Resources").mkdir()
+    (contents / "Info.plist").write_bytes(plistlib.dumps({
+        "CFBundleIdentifier": BUNDLE_IDENTIFIER,
+        "CFBundleName": "WeChat Provider",
+        "CFBundleExecutable": EXECUTABLE_NAME,
+        "CFBundlePackageType": "APPL",
+        "CFBundleVersion": "1",
+        "CFBundleShortVersionString": "1.0",
+        "LSUIElement": True,
+        RUNTIME_PATH_KEY: str(config_path),
+    }))
+    swift_source = Path(source) if source is not None else Path(__file__).with_name("ProviderMain.swift")
+    executable = contents / "MacOS" / EXECUTABLE_NAME
+    _run([swiftc, str(swift_source), "-o", str(executable)])
+    identity = "-" if sign is None else sign
+    _run([codesign, "--force", "--sign", identity, str(app)])
+    _run([codesign, "--verify", "--strict", str(app)])
+
+
 def build(runtime: dict, output: Path, *, sign: str | None = None,
           runtime_path: Path | None = None, force: bool = False,
           swiftc: str = "swiftc", codesign: str = "codesign",
           source: Path | None = None) -> dict:
-    """Build the reviewable ad-hoc (default) or certificate-signed app + plist."""
+    """Build the reviewable ad-hoc (default) or certificate-signed app + plist.
+
+    The new bundle is compiled and signed in a sibling staging directory; an
+    existing ``--force`` app is only moved aside after the new bundle is ready,
+    so a failed compiler/signing step leaves the old helper untouched.
+    """
     runtime = validate_runtime(runtime)
     output_path = Path(os.path.abspath(Path(output).expanduser()))
+    try:
+        output_path.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise BuildError(f"cannot create output directory: {error}") from error
+    if not output_path.is_dir():
+        raise BuildError(f"output path is not a directory: {output_path}")
     app = _absolute(output_path / APP_NAME)
-    if app.is_symlink():
-        raise BuildError(f"refusing to replace a symlinked app bundle: {app}")
     if app.exists() and not app.is_dir():
         raise BuildError(f"app path exists but is not a bundle directory: {app}")
     if app.exists() and not force:
@@ -176,33 +222,26 @@ def build(runtime: dict, output: Path, *, sign: str | None = None,
     if sign is not None and not sign.strip():
         raise BuildError("empty signing identity; omit --sign for ad-hoc or pass a real identity")
 
-    if app.exists():  # only reachable with explicit --force
-        shutil.rmtree(app)
     try:
-        contents = app / "Contents"
-        (contents / "MacOS").mkdir(parents=True)
-        (contents / "Resources").mkdir()
-        (contents / "Info.plist").write_bytes(plistlib.dumps({
-            "CFBundleIdentifier": BUNDLE_IDENTIFIER,
-            "CFBundleName": "WeChat Provider",
-            "CFBundleExecutable": EXECUTABLE_NAME,
-            "CFBundlePackageType": "APPL",
-            "CFBundleVersion": "1",
-            "CFBundleShortVersionString": "1.0",
-            "LSUIElement": True,
-            RUNTIME_PATH_KEY: str(config_path),
-        }))
-        swift_source = Path(source) if source is not None else Path(__file__).with_name("ProviderMain.swift")
-        executable = contents / "MacOS" / EXECUTABLE_NAME
-        _run([swiftc, str(swift_source), "-o", str(executable)])
-        identity = "-" if sign is None else sign
-        _run([codesign, "--force", "--sign", identity, str(app)])
-        _run([codesign, "--verify", "--strict", str(app)])
+        staging_root = Path(tempfile.mkdtemp(prefix=".wechat-provider-build-", dir=output_path))
+    except OSError as error:
+        raise BuildError(f"cannot create a staging directory: {error}") from error
+    had_app = app.exists()
+    backup = None
+    try:
+        staging_app = staging_root / APP_NAME
+        _compile_bundle(staging_app, config_path, sign=sign, swiftc=swiftc,
+                        codesign=codesign, source=source)
         write_runtime(config_path, runtime)
-
+        if had_app:
+            backup = output_path / f".{APP_NAME}.previous"
+            if backup.exists():
+                shutil.rmtree(backup, ignore_errors=True)
+            os.replace(app, backup)
+        os.replace(staging_app, app)
         agent = {
             "Label": BUNDLE_IDENTIFIER,
-            "ProgramArguments": [str(executable)],
+            "ProgramArguments": [str(app / "Contents" / "MacOS" / EXECUTABLE_NAME)],
             "RunAtLoad": True,
             "ThrottleInterval": 30,
             "KeepAlive": {"SuccessfulExit": False},
@@ -210,12 +249,28 @@ def build(runtime: dict, output: Path, *, sign: str | None = None,
         if sign is not None:
             # Team-identifier based association is only meaningful for certificate builds.
             agent["AssociatedBundleIdentifiers"] = [BUNDLE_IDENTIFIER]
-        agent_path = output_path / f"{BUNDLE_IDENTIFIER}.plist"
+        agent_path = app.parent / f"{BUNDLE_IDENTIFIER}.plist"
         agent_path.write_bytes(plistlib.dumps(agent))
-    except Exception:
-        # Never leave a half-built bundle that looks installable.
-        shutil.rmtree(app, ignore_errors=True)
+    except Exception as error:  # noqa: BLE001 - restore a previous bundle on any failure
+        if backup is not None and backup.exists():
+            if app.exists():
+                shutil.rmtree(app, ignore_errors=True)
+            try:
+                os.replace(backup, app)
+            except OSError:
+                pass
+        elif app.exists() and not had_app:
+            shutil.rmtree(app, ignore_errors=True)
+        shutil.rmtree(staging_root, ignore_errors=True)
+        if isinstance(error, BuildError):
+            raise
+        if isinstance(error, OSError):
+            raise BuildError(f"build failed while writing files: {error}") from error
         raise
+    else:
+        shutil.rmtree(staging_root, ignore_errors=True)
+        if backup is not None:
+            shutil.rmtree(backup, ignore_errors=True)
     return {
         "mode": "ad-hoc" if sign is None else "certificate",
         "app": str(app),
@@ -244,7 +299,10 @@ def configure(runtime: dict, output: Path, *, runtime_path: Path | None = None) 
     if runtime_path is not None and _absolute(runtime_path) != _absolute(configured):
         raise BuildError("changing the runtime configuration path requires rebuilding the helper")
     runtime = validate_runtime(runtime)
-    path = write_runtime(configured, runtime)
+    try:
+        path = write_runtime(configured, runtime)
+    except OSError as error:
+        raise BuildError(f"cannot update runtime configuration: {error}") from error
     return {
         "mode": "configured",
         "app": str(app),
@@ -275,6 +333,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--swiftc", default="swiftc")
     parser.add_argument("--codesign", default="codesign")
     args = parser.parse_args(argv)
+    if args.configure_only and (args.sign is not None or args.force):
+        parser.error("--sign and --force only apply to a build; remove them with --configure-only")
     try:
         runtime = load_runtime(args.runtime)
         if args.configure_only:
@@ -285,9 +345,15 @@ def main(argv: list[str] | None = None) -> None:
                             swiftc=args.swiftc, codesign=args.codesign)
     except BuildError as error:
         parser.error(str(error))
+    except OSError as error:
+        parser.error(f"I/O failure: {error}")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
-    print("Review the generated LaunchAgent. This script did not install, enable, or "
-          "authorize anything and did not change TCC.")
+    if args.configure_only:
+        print("External runtime configuration updated; the helper binary and signature "
+              "were not touched, and TCC was not changed.")
+    else:
+        print("Review the generated LaunchAgent. This script did not install, enable, or "
+              "authorize anything and did not change TCC.")
 
 
 if __name__ == "__main__":

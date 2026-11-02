@@ -182,6 +182,7 @@ class DeniedReadService(StatusOnlyService):
         return {"messages": [], "chat_id": chat_id, "source": "structured_db"}
 
 
+@POSIX_ONLY  # drives real handle()/socketpair; peer_uid APIs are POSIX-only
 class ReadAccessStateTest(unittest.TestCase):
     """status.ipc.read_access state machine + permanent tcc_verified=false."""
 
