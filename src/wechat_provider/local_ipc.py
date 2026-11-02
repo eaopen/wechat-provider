@@ -1,19 +1,22 @@
 """Same-user, bounded local RPC. No command execution or automatic service startup."""
 from __future__ import annotations
+
 import ctypes
 import inspect
 import json
 import os
-from pathlib import Path
 import socket
-
-from .models import AdapterUnavailable
 import stat
 import struct
+from pathlib import Path
+
+from .models import AdapterUnavailable
+from .native_export import IPC_ERROR_CODES
 
 MAX_FRAME = 1024 * 1024
 METHODS = frozenset(('status', 'list_chats', 'get_messages', 'search',
-                     'send_message', 'get_send_status', 'save_excerpt', 'forget_saved_excerpts'))
+                     'send_message', 'get_send_status', 'save_excerpt', 'forget_saved_excerpts',
+                     'native_export_preview', 'native_export_save'))
 
 
 def peer_uid(connection):
@@ -122,7 +125,10 @@ def handle(connection, service):
             service._ipc_read_state = 'access_denied'
             code = 'source_access_denied'
         elif isinstance(error, (ValueError, TypeError)):
-            code = 'invalid_argument'
+            # Native-export codes are a small documented set; everything else
+            # stays the generic invalid_argument so no internal detail leaks.
+            text = str(error)
+            code = text if text in IPC_ERROR_CODES else 'invalid_argument'
         elif isinstance(error, AdapterUnavailable):
             code = 'reader_unavailable'
         else:

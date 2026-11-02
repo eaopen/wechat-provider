@@ -36,8 +36,11 @@ async def main() -> None:
                 await session.initialize()
                 available = sorted(tool.name for tool in (await session.list_tools()).tools)
                 expected = [
-                    "wechat_get_messages", "wechat_get_send_status", "wechat_list_chats",
-                    "wechat_search", "wechat_send_message", "wechat_status",
+                    "wechat_forget_saved_excerpts", "wechat_get_messages",
+                    "wechat_get_send_status", "wechat_list_chats",
+                    "wechat_native_export_preview", "wechat_native_export_save",
+                    "wechat_save_excerpt", "wechat_search", "wechat_send_message",
+                    "wechat_status",
                 ]
                 assert available == expected, available
                 result = await session.call_tool("wechat_status", {})

@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,10 @@ import unittest
 from unittest.mock import patch
 from wechat_provider.local_ipc import handle, send, receive, RemoteService, socket_path, MAX_FRAME
 from wechat_provider.models import AdapterUnavailable
+
+# The MCP proxy subprocess needs the optional `mcp` package; the minimal CI
+# matrix installs no dependencies, so skip instead of failing for that reason.
+MCP_AVAILABLE = importlib.util.find_spec("mcp") is not None
 
 
 @unittest.skipUnless(os.name == 'posix', 'Unix sockets require POSIX')
@@ -103,6 +108,7 @@ class IPCTest(unittest.TestCase):
             with self.assertRaises(PermissionError):
                 socket_path(str(root/'provider.sock'))
 
+    @unittest.skipUnless(MCP_AVAILABLE, "MCP client dependency not installed")
     def test_process_read_and_mcp_proxy(self):
         with tempfile.TemporaryDirectory() as root:
             root = Path(root).resolve(); root.chmod(0o700)
