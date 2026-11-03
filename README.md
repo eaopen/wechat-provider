@@ -65,7 +65,7 @@ wechat-provider serve
 - wechat_save_excerpt(chat_title, text)：仅显式点击后把用户复制的文字写入 Provider 自有 SQLite 索引
 - wechat_forget_saved_excerpts(chat_title)：只移除此名称下手动保存的片段，不删除微信数据或其他来源导入记录
 - `wechat_native_export_preview(grant_token, timezone_offset_minutes?, offset?, limit?)`：校验一次性授权文件后，有界预览用户选择的微信合并转发 ZIP（不持久化聊天内容）
-- `wechat_native_export_save(grant_token, expected_fingerprint)`：用户显式点击后幂等写入本机索引（`source=native_share`）；指纹不符则不导入
+- `wechat_native_export_save(grant_token, expected_fingerprint, timezone_offset_minutes?)`：用户显式点击后幂等写入本机索引（`source=native_share`）；指纹不符则不导入；显式时区才保留带偏移时间戳
 
 ## 使用边界
 
@@ -164,7 +164,11 @@ Provider 自有 SQLite（`messages.source = "native_share"` + 同库 `native_exp
   路径 512 字节；拒绝路径穿越、绝对路径、符号链接、加密、不支持压缩方法、ZIP64、多分卷、重名、
   控制字符与坏 CRC。原文件绝不移动/改名/删除。
 - 时区不静默转换：只有显式 `timezone_offset_minutes` 才产生带偏移的 `sent_at`；否则只保留本地时间并告警。
-- 附件 P0 仅为元数据（不提取、不落盘）。保存的 `sent_at` 在 P0 为 `NULL`（保存调用按合约不带时区）。
+- 保存同样接受可选的 `timezone_offset_minutes`：提供时保存的行保留带偏移的 `sent_at`，并记录到
+  `native_exports.timezone_offset_minutes`；缺省时保存的 `sent_at` 为 `NULL`（保存调用不假设时区）。
+- 重复保存同一份导出（即使时区参数不同）只报告 `already_imported`，不会重写已存时间戳，也不会因
+  身份冲突而失败。
+- 附件 P0 仅为元数据（不提取、不落盘）。
 - 只验证微信 macOS 合并转发 TXT 格式；**合成 ZIP 不等于真实微信分享已验证**，也不读取微信数据库、
   登录状态或权限。
 

@@ -1,6 +1,7 @@
 """Explicit existing Wechat-MCP SDK; no setup, archive refresh or GUI calls."""
 import os
 from pathlib import Path
+
 from .greenbubbles_reader import GreenBubblesReader
 
 

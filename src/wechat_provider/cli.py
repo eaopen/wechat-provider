@@ -50,6 +50,7 @@ def main() -> None:
         "save-native-export", help="Import a previewed merged-forward ZIP into the local index")
     save.add_argument("grant_token")
     save.add_argument("--fingerprint", required=True)
+    save.add_argument("--timezone-offset-minutes", type=int, default=None)
     args = parser.parse_args()
     if args.action == "daemon":
         from .local_ipc import serve
@@ -88,7 +89,8 @@ def main() -> None:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.action == "save-native-export":
         try:
-            result = svc.save_native_export(args.grant_token, args.fingerprint)
+            result = svc.save_native_export(
+                args.grant_token, args.fingerprint, args.timezone_offset_minutes)
         except ValueError as exc:
             parser.error(str(exc))
         print(json.dumps(result, ensure_ascii=False, indent=2))

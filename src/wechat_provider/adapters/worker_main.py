@@ -19,7 +19,8 @@ def main() -> None:
         if action not in {"list_chats", "get_messages", "send_text"}:
             raise ValueError("Unsupported worker action")
         if not isinstance(args, dict):
-            raise ValueError("Invalid worker arguments")
+            # Type validation is deliberate; ValueError keeps one worker error kind.
+            raise ValueError("Invalid worker arguments")  # noqa: TRY004  # uniform error kind
 
         # Suppress both Python prints and fd=1 writes by dependencies.
         original_stdout = os.dup(sys.stdout.fileno())
@@ -48,7 +49,7 @@ def main() -> None:
         output = {"ok": True, "result": result}
     except AdapterUnavailable as exc:
         output = {"ok": False, "kind": "AdapterUnavailable", "detail": str(exc)}
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  # never leak library/GUI exception text
         # Never return exception str here: GUI libraries may include chat content.
         output = {"ok": False, "kind": type(exc).__name__}
     sys.stdout.write(json.dumps(output, ensure_ascii=False) + "\n")

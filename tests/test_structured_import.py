@@ -20,9 +20,9 @@ class StructuredImportTest(unittest.TestCase):
         self.path = self.root / 'export.jsonl'
 
     def row(self, id, day, text=None):
-        return dict(chat_id='虚构会话', source_id=id, text=text or '测试消息'+id,
-                    sender='虚构联系人', sent_at=f'2026-10-{day:02}T08:00:00+08:00',
-                    source='authorized_export')
+        return {'chat_id': '虚构会话', 'source_id': id, 'text': text or '测试消息'+id,
+                'sender': '虚构联系人', 'sent_at': f'2026-10-{day:02}T08:00:00+08:00',
+                'source': 'authorized_export'}
 
     def load(self, rows):
         self.path.write_text('\n'.join(json.dumps(r) for r in rows), encoding='utf8')
@@ -59,9 +59,8 @@ class StructuredImportTest(unittest.TestCase):
     def test_invalid_types_and_ambiguous_times_rejected(self):
         for changes in ({'text': {}}, {'sent_at': '2026-10-01T08:00:00'},
                         {'source_id': 'x\0y'}, {'text': 'x' * 32001}):
-            with self.subTest(changes=list(changes)):
-                with self.assertRaises(ValueError):
-                    self.load([{**self.row('1', 1), **changes}])
+            with self.subTest(changes=list(changes)), self.assertRaises(ValueError):
+                self.load([{**self.row('1', 1), **changes}])
         self.assertEqual(self.store.get_messages('fixture-a', '虚构会话'), [])
 
     def test_timezone_equivalence_is_idempotent(self):

@@ -168,12 +168,18 @@ truncation). When the window exceeds the byte cap, return fewer messages with
 `window.has_more = true` and `window.next_offset` set.
 
 ### `wechat_native_export_save`
-Args: `grant_token: str`, `expected_fingerprint: str` (`sha256:<hex>`).
+Args: `grant_token: str`, `expected_fingerprint: str` (`sha256:<hex>`),
+`timezone_offset_minutes: int | null = null`.
 
+- Validate `timezone_offset_minutes` first (`-840..=840`, non-bool int); an invalid value is
+  `invalid_argument` **before** the one-time grant is consumed.
 - Re-parse the granted ZIP; require `fingerprint == expected_fingerprint`
   (else `native_export_changed`, nothing imported — TOCTOU guard).
 - Import through the **existing** `Store.import_messages` transaction (no second index DB):
   rows `{chat_id: session_id, source_id, sender, sent_at, text, source: "native_share"}`.
+  With an explicit offset `sent_at` is the same offset-aware ISO the preview produced
+  (e.g. `2026-09-05T08:05:00+08:00`) and `native_exports.timezone_offset_minutes` records it;
+  without one `sent_at` stays `NULL` (the local timestamp is never silently converted).
 - Insert/update one metadata row in new table `native_exports` (same SQLite file):
 
 ```sql
@@ -190,15 +196,22 @@ CREATE TABLE IF NOT EXISTS native_exports (
 );
 ```
 
-- Idempotent: second save of the same fingerprint → `imported: 0`, `duplicates: <n>`,
-  `already_imported: true` (not an error).
+- Idempotent: a fingerprint already recorded → strict no-op (`imported: 0`,
+  `duplicates: <recorded message_count>`, `already_imported: true`, not an error). Nothing is
+  re-inserted or rewritten, so re-saving with a different offset cannot raise an identity conflict
+  and cannot change stored `sent_at`; the receipt reports the offset recorded at the first save.
 - Returns:
 
 ```json
 {"ok":true,"saved":true,"source":"native_share","session_id":"native_share:<32 hex>",
  "fingerprint":"sha256:<64 hex>","imported":42,"duplicates":0,"already_imported":false,
- "message_count":42,"attachment_count":2,"live_read":false,"complete":false}
+ "message_count":42,"attachment_count":2,
+ "timezone":{"applied":true,"offset_minutes":480},
+ "live_read":false,"complete":false}
 ```
+
+`timezone` is `{"applied": false}` when no offset was sent. Companion validates it when present
+(and requires `applied == true` with the exact offset it sent; older Providers may omit it).
 
 ### `wechat_native_export_archive` (reserved, NOT exposed in P0)
 Documented internal contract only: would write Markdown/attachments to a user-chosen directory
@@ -235,7 +248,7 @@ IPC whitelist (`local_ipc.METHODS`) must include `native_export_preview`, `nativ
 
 CLI (developer/acceptance convenience, same validation):
 `wechat-provider preview-native-export <grant_token> [--timezone-offset-minutes N]`,
-`wechat-provider save-native-export <grant_token> --fingerprint <sha256:...>`,
+`wechat-provider save-native-export <grant_token> --fingerprint <sha256:...> [--timezone-offset-minutes N]`,
 `wechat-provider grant-native-export <path.zip> --purpose preview|save --grant-dir <dir>`
 (the last one only for tests/acceptance; product path is Companion minting the grant).
 
@@ -337,5 +350,8 @@ its databases, permissions, or the user's installed Provider copy (isolated via
 - Only the WeChat macOS merged-forward ZIP text format is verified; other exporters/versions are
   not claimed. Windows share entry is not implemented (P1 interface only).
 - Attachments are metadata only in P0 (no extraction, no note links).
+- Saved message timestamps need an explicit timezone offset at save time. Rows saved without one
+  stay `sent_at = NULL` (honest; no silent local-time conversion), and a later re-save of the same
+  fingerprint does not rewrite them. There is no in-place "add timezone" migration yet.
 - Client-side XML/crypto not touched; no WeChat login or database access in any code path.
 - Synthetic ZIPs prove the pipeline; they do **not** prove a real WeChat share was captured.

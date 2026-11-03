@@ -84,8 +84,8 @@ class NativeExportBase(unittest.TestCase):
     def preview(self, zip_path, **kwargs):
         return self.service.preview_native_export(self.mint(zip_path), **kwargs)
 
-    def save(self, zip_path, fingerprint):
-        return self.service.save_native_export(self.mint(zip_path, "save"), fingerprint)
+    def save(self, zip_path, fingerprint, **kwargs):
+        return self.service.save_native_export(self.mint(zip_path, "save"), fingerprint, **kwargs)
 
     def expect_error(self, zip_path, code, **kwargs) -> None:
         with self.assertRaises(ValueError) as caught:
@@ -596,7 +596,7 @@ class PreviewWindowTest(NativeExportBase):
 class SaveAndProvenanceTest(NativeExportBase):
     def test_save_imports_idempotently_into_existing_sqlite(self):
         path = self.sample_zip()
-        preview = self.preview(path, timezone_offset_minutes=480)["export"]
+        preview = self.preview(path)["export"]
         fingerprint = preview["fingerprint"]
         first = self.save(path, fingerprint)
         self.assertEqual(first["imported"], 3)
@@ -604,6 +604,8 @@ class SaveAndProvenanceTest(NativeExportBase):
         self.assertFalse(first["already_imported"])
         self.assertFalse(first["live_read"])
         self.assertFalse(first["complete"])
+        # Without an explicit offset no absolute timestamp is invented.
+        self.assertEqual(first["timezone"], {"applied": False})
         self.assertEqual(first["session_id"], preview["session_id"])
         self.assertEqual(first["fingerprint"], fingerprint)
         rows = self.store.get_messages("fixture-account", preview["session_id"], 10)
@@ -625,7 +627,74 @@ class SaveAndProvenanceTest(NativeExportBase):
         self.assertEqual(second["imported"], 0)
         self.assertEqual(second["duplicates"], 3)
         self.assertTrue(second["already_imported"])
+        self.assertEqual(second["timezone"], {"applied": False})
         self.assertEqual(len(self.store.get_messages("fixture-account", preview["session_id"])), 3)
+
+    def test_save_with_offset_persists_offset_aware_timestamps(self):
+        path = self.sample_zip()
+        fingerprint = self.preview(path)["export"]["fingerprint"]
+        saved = self.save(path, fingerprint, timezone_offset_minutes=480)
+        self.assertEqual(saved["imported"], 3)
+        self.assertFalse(saved["already_imported"])
+        self.assertEqual(saved["timezone"], {"applied": True, "offset_minutes": 480})
+        expected = ["2026-09-05T08:05:00+08:00", "2026-09-05T08:06:00+08:00",
+                    "2026-09-05T08:07:00+08:00"]
+        rows = self.store.get_messages("fixture-account", saved["session_id"], 10)
+        self.assertEqual([row["sent_at"] for row in rows], expected)
+        # local_index read-back keeps the absolute timestamps.
+        history = self.service.get_messages(saved["session_id"], 10, source="local_index")
+        self.assertEqual([message["sent_at"] for message in history["messages"]], expected)
+        self.assertEqual({row["chat_id"]: row for row in
+                          self.service.list_chats(source="local_index")["chats"]}
+                         [saved["session_id"]]["message_count"], 3)
+        metadata = self.store.get_native_export(fingerprint)
+        self.assertEqual(metadata["timezone_offset_minutes"], 480)
+        # A negative offset is recorded verbatim (UTC-05:00, not silently normalised).
+        other = self.make_zip([(TRANSCRIPT, transcript(("甲", "2026年9月5日 08:05", "负时区")))])
+        other_fingerprint = self.preview(other)["export"]["fingerprint"]
+        negative = self.save(other, other_fingerprint, timezone_offset_minutes=-300)
+        self.assertEqual(negative["timezone"], {"applied": True, "offset_minutes": -300})
+        other_rows = self.store.get_messages("fixture-account", negative["session_id"], 10)
+        self.assertEqual([row["sent_at"] for row in other_rows], ["2026-09-05T08:05:00-05:00"])
+
+    def test_resave_with_different_offset_is_a_noop(self):
+        path = self.sample_zip()
+        fingerprint = self.preview(path, timezone_offset_minutes=480)["export"]["fingerprint"]
+        first = self.save(path, fingerprint, timezone_offset_minutes=480)
+        self.assertFalse(first["already_imported"])
+        stored = [row["sent_at"] for row in
+                  self.store.get_messages("fixture-account", first["session_id"], 10)]
+        self.assertTrue(all(stamp.endswith("+08:00") for stamp in stored))
+
+        # A different offset on re-save must neither raise an identity conflict nor
+        # rewrite stored timestamps; the receipt reports the recorded offset.
+        second = self.save(path, fingerprint, timezone_offset_minutes=-300)
+        self.assertEqual(second["imported"], 0)
+        self.assertEqual(second["duplicates"], 3)
+        self.assertTrue(second["already_imported"])
+        self.assertEqual(second["timezone"], {"applied": True, "offset_minutes": 480})
+        unchanged = [row["sent_at"] for row in
+                     self.store.get_messages("fixture-account", first["session_id"], 10)]
+        self.assertEqual(unchanged, stored)
+        self.assertEqual(self.store.get_native_export(fingerprint)["timezone_offset_minutes"], 480)
+
+        # Re-saving without an offset cannot clear or rewrite the recorded offset.
+        third = self.save(path, fingerprint)
+        self.assertTrue(third["already_imported"])
+        self.assertEqual(third["timezone"], {"applied": True, "offset_minutes": 480})
+        self.assertEqual(
+            self.store.get_native_export(fingerprint)["timezone_offset_minutes"], 480)
+
+    def test_save_invalid_offset_is_argument_error(self):
+        path = self.sample_zip()
+        fingerprint = self.preview(path)["export"]["fingerprint"]
+        for value in (True, 841, -841, 480.0, "480"):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError) as caught:
+                    self.save(path, fingerprint, timezone_offset_minutes=value)
+                self.assertEqual(str(caught.exception), ne.ERROR_INVALID_ARGUMENT)
+        self.assertIsNone(self.store.get_native_export(fingerprint))
+        self.assertEqual(self.service.list_chats(source="local_index")["chats"], [])
 
     def test_fingerprint_mismatch_imports_nothing(self):
         path = self.sample_zip()
@@ -762,10 +831,14 @@ class StatusAndIpcTest(NativeExportBase):
         save_token = self.mint(path, "save")
         call({"version": 1, "method": "native_export_save", "args": [],
               "kwargs": {"grant_token": save_token,
-                         "expected_fingerprint": result["result"]["export"]["fingerprint"]}})
+                         "expected_fingerprint": result["result"]["export"]["fingerprint"],
+                         "timezone_offset_minutes": 480}})
         saved = responses["value"]
         self.assertTrue(saved["ok"])
         self.assertEqual(saved["result"]["imported"], 3)
+        self.assertEqual(saved["result"]["timezone"], {"applied": True, "offset_minutes": 480})
+        stored = self.store.get_messages("fixture-account", saved["result"]["session_id"], 10)
+        self.assertTrue(all(row["sent_at"].endswith("+08:00") for row in stored))
 
     def test_ipc_exposes_only_stable_native_export_error_codes(self):
         """Companion needs to tell a corrupt ZIP from a bad request without raw text."""
@@ -832,14 +905,39 @@ class CliTest(NativeExportBase):
                              "--grant-dir", str(self.grant_dir))
         token = json.loads(grant.stdout)["grant_token"]
         save = self.run_cli("save-native-export", token,
-                            "--fingerprint", data["export"]["fingerprint"])
+                            "--fingerprint", data["export"]["fingerprint"],
+                            "--timezone-offset-minutes", "480")
         self.assertEqual(save.returncode, 0, save.stderr)
         receipt = json.loads(save.stdout)
         self.assertEqual((receipt["imported"], receipt["duplicates"]), (3, 0))
         self.assertFalse(receipt["already_imported"])
+        self.assertEqual(receipt["timezone"], {"applied": True, "offset_minutes": 480})
 
         stored = Store(self.root / "wechat.db")
-        self.assertEqual(len(stored.get_messages("default", receipt["session_id"], 10)), 3)
+        rows = stored.get_messages("default", receipt["session_id"], 10)
+        self.assertEqual(len(rows), 3)
+        self.assertEqual([row["sent_at"] for row in rows],
+                         ["2026-09-05T08:05:00+08:00", "2026-09-05T08:06:00+08:00",
+                          "2026-09-05T08:07:00+08:00"])
+
+        # A second save with another offset is reported as already imported and
+        # does not rewrite the stored timestamps.
+        grant = self.run_cli("grant-native-export", str(path), "--purpose", "save",
+                             "--grant-dir", str(self.grant_dir))
+        token = json.loads(grant.stdout)["grant_token"]
+        replay = self.run_cli("save-native-export", token,
+                              "--fingerprint", data["export"]["fingerprint"],
+                              "--timezone-offset-minutes", "0")
+        self.assertEqual(replay.returncode, 0, replay.stderr)
+        replay_receipt = json.loads(replay.stdout)
+        self.assertTrue(replay_receipt["already_imported"])
+        self.assertEqual(replay_receipt["duplicates"], 3)
+        self.assertEqual(replay_receipt["timezone"], {"applied": True, "offset_minutes": 480})
+        stored = Store(self.root / "wechat.db")
+        self.assertEqual([row["sent_at"] for row in
+                          stored.get_messages("default", receipt["session_id"], 10)],
+                         ["2026-09-05T08:05:00+08:00", "2026-09-05T08:06:00+08:00",
+                          "2026-09-05T08:07:00+08:00"])
 
     def test_cli_rejects_unsafe_archive_and_bad_grant(self):
         unsafe = self.make_zip([(TRANSCRIPT, transcript(("甲", "2026年9月5日 08:05", "hi"))),

@@ -74,13 +74,18 @@ def wechat_native_export_preview(grant_token: str,
 
 
 @mcp.tool()
-def wechat_native_export_save(grant_token: str, expected_fingerprint: str) -> dict:
+def wechat_native_export_save(grant_token: str, expected_fingerprint: str,
+                              timezone_offset_minutes: int | None = None) -> dict:
     """Explicitly import a previewed export into the local index (idempotent).
 
     `expected_fingerprint` must echo the preview; a changed ZIP is rejected.
+    With `timezone_offset_minutes` the saved rows keep an offset-aware `sent_at`
+    and the offset is recorded; without it `sent_at` stays null (never assumed).
+    An already-recorded fingerprint is a no-op that does not rewrite timestamps.
     Attachments stay metadata-only in P0.
     """
-    return service().native_export_save(grant_token, expected_fingerprint)
+    return service().native_export_save(
+        grant_token, expected_fingerprint, timezone_offset_minutes)
 
 
 @mcp.tool()

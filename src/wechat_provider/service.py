@@ -31,6 +31,7 @@ from .native_export import (
     PLATFORM_SUPPORTED,
     SOURCE_KIND,
     TOKEN_RE,
+    apply_timezone,
     consume_grant,
     default_grant_dir,
     ensure_grant_dir,
@@ -178,32 +179,54 @@ class Service:
             already_saved=already_saved,
         )
 
-    def save_native_export(self, grant_token: str, expected_fingerprint: str) -> dict[str, Any]:
-        """Explicitly import a previewed export into the existing Provider index."""
+    def save_native_export(self, grant_token: str, expected_fingerprint: str,
+                           timezone_offset_minutes: int | None = None) -> dict[str, Any]:
+        """Explicitly import a previewed export into the existing Provider index.
+
+        With an explicit ``timezone_offset_minutes`` saved rows get an offset-aware
+        ``sent_at`` and ``native_exports.timezone_offset_minutes`` is set; without
+        one ``sent_at`` stays NULL (the local timestamp is never silently converted).
+        A fingerprint already recorded is a no-op: nothing is re-inserted and stored
+        timestamps are never rewritten, so re-saving with a different offset cannot
+        raise an identity conflict.
+        """
         if not PLATFORM_SUPPORTED:
             raise ValueError(ERROR_UNSUPPORTED)
         if type(grant_token) is not str or not TOKEN_RE.fullmatch(grant_token):
             raise ValueError(ERROR_INVALID_ARGUMENT)
         if type(expected_fingerprint) is not str or not FINGERPRINT_RE.fullmatch(expected_fingerprint):
             raise ValueError(ERROR_INVALID_ARGUMENT)
+        if timezone_offset_minutes is not None and (
+                type(timezone_offset_minutes) is not int
+                or not -840 <= timezone_offset_minutes <= 840):
+            raise ValueError(ERROR_INVALID_ARGUMENT)
         zip_path = consume_grant(self.grant_dir, grant_token, "save")
         export = load_native_export(zip_path)
         if export.fingerprint != expected_fingerprint:
             # TOCTOU guard: the archive changed after preview; import nothing.
             raise ValueError(ERROR_CHANGED)
-        already_recorded = self.store.get_native_export(export.fingerprint) is not None
+        recorded = self.store.get_native_export(export.fingerprint)
+        if recorded is not None:
+            # Already recorded: re-inserting would conflict when the offsets differ
+            # and could rewrite `sent_at`; both are forbidden, so this is a bounded
+            # no-op that reports the offset actually stored for this export.
+            return self._native_export_receipt(
+                export,
+                imported=0,
+                duplicates=recorded["message_count"],
+                already_imported=True,
+                timezone_offset_minutes=recorded["timezone_offset_minutes"],
+            )
         rows = [{
             "chat_id": export.session_id,
             "source_id": record.source_id,
             "text": record.text,
             "sender": record.sender,
-            # P0 save carries no timezone offset, so no absolute timestamp is invented.
-            "sent_at": None,
+            "sent_at": (apply_timezone(record.local_time, timezone_offset_minutes)
+                        if timezone_offset_minutes is not None else None),
             "source": SOURCE_KIND,
         } for record in export.records]
         result = self.store.import_messages(self.account_key, rows)
-        # Only claim "already imported" when this account really gained nothing new.
-        already_imported = already_recorded and result["imported"] == 0
         self.store.record_native_export({
             "session_id": export.session_id,
             "fingerprint": export.fingerprint,
@@ -211,20 +234,37 @@ class Service:
             "message_count": len(export.records),
             "participant_count": len(export.participants),
             "attachment_count": len(export.attachments),
-            "timezone_offset_minutes": None,
+            "timezone_offset_minutes": timezone_offset_minutes,
             "source_zip_name": export.archive_name,
         })
+        return self._native_export_receipt(
+            export,
+            imported=result["imported"],
+            duplicates=result["duplicates"],
+            already_imported=False,
+            timezone_offset_minutes=timezone_offset_minutes,
+        )
+
+    @staticmethod
+    def _native_export_receipt(export, *, imported: int, duplicates: int,
+                               already_imported: bool,
+                               timezone_offset_minutes: int | None) -> dict[str, Any]:
+        timezone_field: dict[str, Any] = (
+            {"applied": True, "offset_minutes": timezone_offset_minutes}
+            if timezone_offset_minutes is not None else {"applied": False}
+        )
         return {
             "ok": True,
             "saved": True,
             "source": SOURCE_KIND,
             "session_id": export.session_id,
             "fingerprint": export.fingerprint,
-            "imported": result["imported"],
-            "duplicates": result["duplicates"],
+            "imported": imported,
+            "duplicates": duplicates,
             "already_imported": already_imported,
             "message_count": len(export.records),
             "attachment_count": len(export.attachments),
+            "timezone": timezone_field,
             "live_read": False,
             "complete": False,
         }
@@ -345,7 +385,7 @@ class Service:
                 self.adapter.send_text(chat_id, text)
             except AdapterUnavailable as exc:
                 self.store.finish(task["task_id"], "failed", str(exc))
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001  # unknown UI failure is never auto-retried
                 # May have reached the send button already; never auto-retry.
                 self.store.finish(task["task_id"], "uncertain", type(exc).__name__)
             else:

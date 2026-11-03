@@ -16,9 +16,9 @@
 | 能力 | 说明 |
 | --- | --- |
 | 预览 | 返回参与人、消息数、附件数、本地时间范围、覆盖度；消息分批（默认 200 条）有界返回 |
-| 时区 | 只有显式传入 `timezone_offset_minutes` 时才产生带偏移的 `sent_at`；否则只保留本地时间文本并给出 warning，绝不假设系统时区 |
+| 时区 | 只有显式传入 `timezone_offset_minutes` 时才产生带偏移的 `sent_at`（预览与保存均支持）；否则只保留本地时间文本并给出 warning，绝不假设系统时区 |
 | 范围选择 | Companion 用 `sender：text` 勾选 ≤ 7800 UTF-8 字节，由 Companion 侧拦截，Provider 不改限制 |
-| 保存（可选） | 用户显式点击后，整份导出（≤ 20000 条）幂等写入 Provider 既有 SQLite；重复保存只计 duplicates |
+| 保存（可选） | 用户显式点击后，整份导出（≤ 20000 条）幂等写入 Provider 既有 SQLite；可显式传时区以保留带偏移 `sent_at`；重复保存只计 duplicates |
 | 附件 | 仅元数据：`{name, kind, bytes}`，最多返回 50 条；正文行与附件名/文件名完全相等时才记录 `attachment_refs` |
 | 归档（保留） | `Service.archive_native_export` 为 P1.5 预留，P0 抛 `native_export_unsupported`，不暴露 MCP 工具 |
 
@@ -34,7 +34,7 @@ Companion（用户明确选择 ZIP，前台动作）
   → Provider 校验授权 → 删除授权（一次性，失败也删）→ 打开 ZIP → 解析
   → 返回有界预览 JSON（不持久化聊天内容）
 用户点击保存：
-  → 第二个授权 → wechat_native_export_save( grant_token, expected_fingerprint )
+  → 第二个授权 → wechat_native_export_save( grant_token, expected_fingerprint, timezone_offset_minutes )
   → Provider 重新解析并核对指纹（TOCTOU），再写入本机索引
 ```
 
@@ -96,24 +96,38 @@ TXT 发现：优先 basename 精确等于 `聊天记录.txt` 的条目；否则�
 
 ## 时区
 
-TXT 时间戳没有时区。`wechat_native_export_preview(..., timezone_offset_minutes)`：
+TXT 时间戳没有时区。预览与保存都通过显式 `timezone_offset_minutes` 决定是否产生绝对时间。
+
+`wechat_native_export_preview(..., timezone_offset_minutes)`：
 
 - 显式整数 `-840..840`：`sent_at` 为带显式偏移的 ISO-8601（如 `2026-09-05T08:05:00+08:00`），
   `sent_at_local` 为 `2026-09-05T08:05`，`export.timezone = {"applied": true, "offset_minutes": N}`。
 - `null`/缺省：`sent_at = null`，保留 `sent_at_local`，`timezone.applied = false` 且带 warning；
   Provider 内部**绝不**假设系统时区。
 
-P0 的 `wechat_native_export_save` 按合约只接收 `grant_token` 和 `expected_fingerprint`，不含时区，
-因此保存的行 `sent_at = NULL`、`native_exports.timezone_offset_minutes = NULL`：不臆造绝对时间。
+P0 的 `wechat_native_export_save` 新增可选 `timezone_offset_minutes`，与预览使用同一校验
+（整数 `-840..840`，否则 `invalid_argument`）：
 
-Companion 在预览时传 `-new Date().getTimezoneOffset()`。
+- 显式传入：保存的行 `sent_at` 为带显式偏移的 ISO-8601（如 `2026-09-05T08:05:00+08:00`），
+  `native_exports.timezone_offset_minutes = N`，保存回执 `"timezone": {"applied": true,
+  "offset_minutes": N}`。
+- `null`/缺省：保存的行 `sent_at = NULL`、`timezone_offset_minutes = NULL`，回执
+  `"timezone": {"applied": false}`：不臆造绝对时间。
+
+幂等规则：同一指纹已记录时，再次保存（无论是否传时区、传不同时区）一律返回
+`imported = 0`、`duplicates = <该导出已记录的消息数>`、`already_imported = true`，**不重新插入**
+任何行，也**不重写**已存 `sent_at`。因此第二次用不同时区保存既不会触发身份冲突，也不会改变已有
+时间戳；此时回执的 `timezone` 报告该导出首次保存时记录的偏移（而非本次请求值）。
+
+Companion 在预览与保存时传 `-new Date().getTimezoneOffset()`（两次使用同一偏移时，保存后的
+`sent_at` 与预览中的绝对时间一致）。
 
 ## Provider 接口
 
 MCP 工具（名称固定）：
 
 - `wechat_native_export_preview(grant_token, timezone_offset_minutes=null, offset=0, limit=200)`
-- `wechat_native_export_save(grant_token, expected_fingerprint)`
+- `wechat_native_export_save(grant_token, expected_fingerprint, timezone_offset_minutes=null)`
 
 IPC 白名单（`local_ipc.METHODS`）新增 `native_export_preview`、`native_export_save`；
 既有 `save_excerpt`、`forget_saved_excerpts` 保持不变。
@@ -123,7 +137,7 @@ IPC 白名单（`local_ipc.METHODS`）新增 `native_export_preview`、`native_e
 ```sh
 wechat-provider grant-native-export /path/to/chat.zip --purpose preview --grant-dir <dir>
 wechat-provider preview-native-export <grant_token> [--timezone-offset-minutes 480] [--offset 0] [--limit 200]
-wechat-provider save-native-export <grant_token> --fingerprint sha256:<64hex>
+wechat-provider save-native-export <grant_token> --fingerprint sha256:<64hex> [--timezone-offset-minutes 480]
 ```
 
 `wechat_status` 新增：
@@ -151,7 +165,8 @@ wechat-provider save-native-export <grant_token> --fingerprint sha256:<64hex>
 
 只使用 Provider 既有的 SQLite（不新增第二个数据库）：
 
-- `messages`：`chat_id = session_id`、`source_id`、`sender`、`sent_at = NULL`、`text`、
+- `messages`：`chat_id = session_id`、`source_id`、`sender`、
+  `sent_at = NULL`（保存未传时区）或带偏移 ISO-8601（保存传了时区）、`text`、
   `source = "native_share"`，沿用 `Store.import_messages` 单事务与幂等语义；
 - `native_exports`（新表，同一文件）：`session_id` 主键、`fingerprint` 唯一、`label`、
   `message_count`、`participant_count`、`attachment_count`、`timezone_offset_minutes`、
@@ -190,6 +205,7 @@ PYTHONPATH=$PWD/src .venv/bin/python -m pytest -q
 
 覆盖：授权一次性/过期/权限/篡改/目的、ZIP 安全矩阵（穿越、符号链接、炸弹/压缩比、加密、
 坏 CRC、方法、重名、ZIP64、多分卷、体积/条目/路径限制）、解析器（单聊/群聊/中英 emoji/多行/
-重复消息/同名不同群/非法日期/BOM/CRLF）、时区显式与缺省、附件元数据与引用、预览窗口与字节上限、
+重复消息/同名不同群/非法日期/BOM/CRLF）、时区显式与缺省、保存时区写入与重复保存不回写、
+附件元数据与引用、预览窗口与字节上限、
 保存幂等与 TOCTOU 指纹、`list_chats` 来源、IPC 白名单、CLI 三个命令，以及真实 MCP stdio
 集成（合成 ZIP、grant→preview→save→local_index）。全部为合成数据，不访问真实微信。

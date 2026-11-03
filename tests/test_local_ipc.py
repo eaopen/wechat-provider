@@ -1,7 +1,6 @@
 import importlib.util
 import json
 import os
-from pathlib import Path
 import socket
 import subprocess
 import sys
@@ -9,8 +8,10 @@ import tempfile
 import threading
 import time
 import unittest
+from pathlib import Path
 from unittest.mock import patch
-from wechat_provider.local_ipc import handle, send, receive, RemoteService, socket_path, MAX_FRAME
+
+from wechat_provider.local_ipc import MAX_FRAME, RemoteService, handle, receive, send, socket_path
 from wechat_provider.models import AdapterUnavailable
 
 # The MCP proxy subprocess needs the optional `mcp` package; the minimal CI
@@ -143,7 +144,7 @@ class IPCTest(unittest.TestCase):
                         'name':'wechat_list_chats','arguments':{'source':'local_index','limit':5}}}]
                 result = subprocess.run([sys.executable,'-m','wechat_provider.cli','proxy','--socket',str(path)],
                     input=''.join(json.dumps(f)+'\n' for f in frames), capture_output=True,
-                    text=True, timeout=15, env=env)
+                    text=True, timeout=15, env=env, check=False)
                 responses = [json.loads(line) for line in result.stdout.splitlines()]
                 reply = next(r for r in responses if r.get('id') == 2)
                 self.assertFalse(reply['result'].get('isError', False))

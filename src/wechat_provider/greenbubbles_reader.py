@@ -1,12 +1,12 @@
 """Optional fixed-profile read-only CLI. Never discovers accounts or acquires keys."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import json
 import os
-from pathlib import Path
 import subprocess
 import threading
+from datetime import datetime, timezone
+from pathlib import Path
 
 from .models import AdapterUnavailable
 
