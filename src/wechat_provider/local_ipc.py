@@ -118,7 +118,7 @@ def handle(connection, service):
                              'tcc_verified': False,
                              'read_access': getattr(service, '_ipc_read_state', 'not_checked')}
         send(connection, {'ok': True, 'result': result})
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001  # every failure must map to a stable code
         # Never reflect private paths, SQL, message text or backend exception details.
         # Only a small stable code set crosses the IPC boundary.
         if 'source_access_denied' in str(error):

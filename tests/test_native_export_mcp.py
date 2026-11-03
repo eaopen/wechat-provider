@@ -142,12 +142,14 @@ class NativeExportMcpStdioTest(unittest.TestCase):
             fingerprint = preview["export"]["fingerprint"]
             saved, saved_error = payload(await session.call_tool(
                 "wechat_native_export_save",
-                {"grant_token": self.grant("save"), "expected_fingerprint": fingerprint}))
+                {"grant_token": self.grant("save"), "expected_fingerprint": fingerprint,
+                 "timezone_offset_minutes": 480}))
             state["saved"] = saved
             state["saved_error"] = saved_error
             again, again_error = payload(await session.call_tool(
                 "wechat_native_export_save",
-                {"grant_token": self.grant("save"), "expected_fingerprint": fingerprint}))
+                {"grant_token": self.grant("save"), "expected_fingerprint": fingerprint,
+                 "timezone_offset_minutes": -300}))
             state["again"] = again
             state["again_error"] = again_error
 
@@ -220,6 +222,7 @@ class NativeExportMcpStdioTest(unittest.TestCase):
         self.assertFalse(saved["already_imported"])
         self.assertFalse(saved["live_read"])
         self.assertFalse(saved["complete"])
+        self.assertEqual(saved["timezone"], {"applied": True, "offset_minutes": 480})
         self.assertEqual(saved["fingerprint"], export["fingerprint"])
         self.assertEqual(saved["session_id"], export["session_id"])
 
@@ -228,6 +231,8 @@ class NativeExportMcpStdioTest(unittest.TestCase):
         self.assertEqual(again["imported"], 0)
         self.assertEqual(again["duplicates"], 3)
         self.assertTrue(again["already_imported"])
+        # The different offset on re-save cannot rewrite the stored timestamps.
+        self.assertEqual(again["timezone"], {"applied": True, "offset_minutes": 480})
 
         chats = state["chats"]
         self.assertEqual(state["chats_error"], "")
@@ -254,9 +259,13 @@ class NativeExportMcpStdioTest(unittest.TestCase):
         rows = stored.get_messages("default", export["session_id"], 10)
         self.assertEqual(len(rows), 3)
         self.assertEqual({row["source"] for row in rows}, {"native_share"})
+        self.assertEqual([row["sent_at"] for row in rows],
+                         ["2026-09-05T08:05:00+08:00", "2026-09-05T08:06:00+08:00",
+                          "2026-09-05T08:07:00+08:00"])
         metadata = stored.get_native_export(export["fingerprint"])
         self.assertIsNotNone(metadata)
         self.assertEqual(metadata["label"], "项目群的聊天记录")
+        self.assertEqual(metadata["timezone_offset_minutes"], 480)
 
     def test_stdio_save_fingerprint_mismatch_is_an_error(self):
         async def flow(session):

@@ -1,7 +1,7 @@
-from pathlib import Path
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 from wechat_provider.greenbubbles_reader import GreenBubblesReader

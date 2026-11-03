@@ -127,8 +127,8 @@ def main():
     p.add_argument('--query-stdin', action='store_true')
     args = p.parse_args()
     try:
+        from wechat_bridge.adapters.wechat_4_1 import ADAPTER_VERSION, open_adapter
         from wechat_bridge.core.config import load_config
-        from wechat_bridge.adapters.wechat_4_1 import open_adapter, ADAPTER_VERSION
         if ADAPTER_VERSION != 'wechat-4.1.15-270102-270135-v2' or not 1 <= args.limit <= 100:
             raise ValueError()
         state = Path(args.state_dir)
@@ -150,7 +150,7 @@ def main():
     except PermissionError:
         print('{"error":"source_access_denied"}')
         return 1
-    except Exception:
+    except Exception:  # noqa: BLE001  # bridge failures map to one stable error
         print('{"error":"wechat_mcp_read_failed"}')
         return 1
     return 0

@@ -1,14 +1,14 @@
 import contextlib
 import os
-from pathlib import Path
 import sys
 import tempfile
 import types
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from wechat_provider.wechat_mcp_reader import WechatMCPReader, configured_reader
-from wechat_provider.wechat_mcp_worker import encode_cursor, decode_cursor, query
+from wechat_provider.wechat_mcp_worker import decode_cursor, encode_cursor, query
 
 
 class WorkerTest(unittest.TestCase):

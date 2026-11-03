@@ -1,6 +1,6 @@
 """Bounded normalized exports only; never open private WeChat databases or acquire keys."""
-from datetime import datetime, timezone
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 MAX_BYTES = 8 * 1024 * 1024
@@ -27,7 +27,8 @@ def read_jsonl(path: Path) -> tuple[list[dict], dict]:
         try:
             obj = json.loads(line)
             if not isinstance(obj, dict):
-                raise ValueError()
+                # Deliberate type check: outer handler reports one bounded error.
+                raise ValueError()  # noqa: TRY004  # bounded import error contract
             for key in ("chat_id", "source_id", "text", "sender", "sent_at", "source"):
                 value = obj.get(key)
                 if value is not None and (not isinstance(value, str) or "\0" in value):
