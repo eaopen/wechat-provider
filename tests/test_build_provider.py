@@ -185,11 +185,11 @@ class BuildShapesTest(unittest.TestCase):
                 target.write_bytes(b"new-helper")
             return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
-        with patch.object(build_provider.subprocess, "run", failing):
-            with self.assertRaisesRegex(BuildError, "command failed"):
-                build_provider.build(valid_runtime(self.root), self.output, force=True,
-                                     swiftc="fake-swiftc", codesign="fake-codesign",
-                                     runtime_path=self.runtime_path)
+        with (patch.object(build_provider.subprocess, "run", failing),
+              self.assertRaisesRegex(BuildError, "command failed")):
+            build_provider.build(valid_runtime(self.root), self.output, force=True,
+                                 swiftc="fake-swiftc", codesign="fake-codesign",
+                                 runtime_path=self.runtime_path)
         self.assertTrue(marker.is_file())  # previous bundle restored, not destroyed
         self.assertEqual(hashlib.sha256(helper.read_bytes()).hexdigest(), before)
 
@@ -219,9 +219,9 @@ class BuildShapesTest(unittest.TestCase):
                 raise OSError(28, "No space left on device")
             return original_write(path, data)
 
-        with patch.object(Path, "write_bytes", flaky):
-            with self.assertRaisesRegex(BuildError, "build failed while writing files"):
-                self.build(force=True)
+        with (patch.object(Path, "write_bytes", flaky),
+              self.assertRaisesRegex(BuildError, "build failed while writing files")):
+            self.build(force=True)
         self.assertTrue(marker.is_file())
         self.assertEqual(hashlib.sha256(helper.read_bytes()).hexdigest(), before)
         self.assertFalse((self.output / f".{build_provider.APP_NAME}.previous").exists())
@@ -238,10 +238,10 @@ class BuildShapesTest(unittest.TestCase):
         runtime_file.write_text(json.dumps(valid_runtime(self.root)))
         for extra in (["--force"], ["--sign", "Some Identity"],
                       ["--swiftc", "/nonexistent/swiftc"]):
-            with contextlib.redirect_stderr(io.StringIO()) as stderr:
-                with self.assertRaises(SystemExit) as caught:
-                    build_provider.main(["--runtime", str(runtime_file), "--output",
-                                         str(self.output), "--configure-only", *extra])
+            with (contextlib.redirect_stderr(io.StringIO()) as stderr,
+                  self.assertRaises(SystemExit) as caught):
+                build_provider.main(["--runtime", str(runtime_file), "--output",
+                                     str(self.output), "--configure-only", *extra])
             self.assertEqual(caught.exception.code, 2)
             self.assertIn("only apply to a build", stderr.getvalue())
 
@@ -332,10 +332,10 @@ class NoCertificateRequirementTest(unittest.TestCase):
             helper = app / "Contents" / "MacOS" / build_provider.EXECUTABLE_NAME
             self.assertTrue(helper.is_file())
             signature = subprocess.run(["codesign", "-dv", str(app)],
-                                       capture_output=True, text=True)
+                                       capture_output=True, text=True, check=False)
             self.assertIn("Signature=adhoc", signature.stderr + signature.stdout)
             self.assertEqual(subprocess.run(["codesign", "--verify", "--strict", str(app)],
-                                            capture_output=True).returncode, 0)
+                                            capture_output=True, check=False).returncode, 0)
             self.assertEqual(runtime_path.stat().st_mode & 0o777, 0o600)
             # Changing Python/reader config must not rebuild or re-sign the helper.
             before = hashlib.sha256(helper.read_bytes()).hexdigest()
@@ -358,7 +358,8 @@ class NoCertificateRequirementTest(unittest.TestCase):
             control = {"python": str(fake_python), "socket": str(socket),
                        "environment": {"WECHAT_PROVIDER_READER": "unconfigured"}}
             build_provider.write_runtime(runtime_path, control)
-            completed = subprocess.run([str(helper)], capture_output=True, timeout=15)
+            completed = subprocess.run([str(helper)], capture_output=True, timeout=15,
+                                       check=False)
             self.assertEqual(completed.returncode, 0)
             self.assertEqual(argv_file.read_text().splitlines(),
                              ["-m", "wechat_provider.cli", "daemon", "--socket", str(socket)])
@@ -368,20 +369,20 @@ class NoCertificateRequirementTest(unittest.TestCase):
                 "environment": {"DYLD_INSERT_LIBRARIES": "/tmp/injected.dylib"}}))
             runtime_path.chmod(0o600)
             self.assertEqual(subprocess.run([str(helper)], capture_output=True,
-                                            timeout=15).returncode, 2)
+                                            timeout=15, check=False).returncode, 2)
             # NUL must be rejected for every allowlisted value, not only path keys.
             runtime_path.write_text(json.dumps({
                 "python": str(fake_python), "socket": str(socket),
                 "environment": {"WECHAT_PROVIDER_ACCOUNT": "bad\u0000value"}}))
             runtime_path.chmod(0o600)
             self.assertEqual(subprocess.run([str(helper)], capture_output=True,
-                                            timeout=15).returncode, 2)
+                                            timeout=15, check=False).returncode, 2)
             # Helper refuses unsafe external config before starting any daemon.
             runtime_path.chmod(0o644)
-            rejected = subprocess.run([str(helper)], capture_output=True)
+            rejected = subprocess.run([str(helper)], capture_output=True, check=False)
             self.assertEqual(rejected.returncode, 2)
             runtime_path.unlink()
-            missing = subprocess.run([str(helper)], capture_output=True)
+            missing = subprocess.run([str(helper)], capture_output=True, check=False)
             self.assertEqual(missing.returncode, 2)
 
 
