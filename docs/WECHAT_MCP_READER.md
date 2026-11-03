@@ -31,4 +31,6 @@ State 目录必须已有 `config.json`、`keys.json`、`identity.json`。密钥�
 
 ## macOS 桌面应用权限
 
-终端验证成功不代表桌面进程具有相同权限。桌面应用读取微信容器可能被 macOS 拒绝（EPERM）；SDK 的递归枚举原先会把它掩盖成零个数据库。本 Reader 先直接检查目录访问，返回 `source_access_denied`，由 Bridge 显示系统授权指引。目标权限所有者为独立 Provider App。Bridge 应注册 socket MCP 代理，不能继续由 Bridge 启动 Reader 并要求授权 Bridge。安装方式及待验收项见 [独立 Provider](MACOS_INDEPENDENT_PROVIDER.md)。不要为此重新取钥、重签名微信或重新登录。
+终端验证成功不代表桌面进程具有相同权限。桌面应用读取微信容器可能被 macOS 拒绝（EPERM）；SDK 的递归枚举原先会把它掩盖成零个数据库。本 Reader 先直接检查目录访问，返回 `source_access_denied`，由 Bridge 显示系统授权指引。目标权限所有者为**固定安装的独立 Provider App/Helper**，不是 Bridge；Bridge 应注册 socket MCP 代理（`wechat-provider proxy --socket ...`），不能继续由 Bridge 启动 Reader 并要求授权 Bridge，Bridge 自身不应申请微信数据库 FDA。
+
+本机使用不要求 Apple Developer ID、Apple Development 或自签证书：直读路径使用一次固定安装的 ad-hoc Helper（`codesign -s -`），Python/SDK/Reader 配置外置在 `~/Library/Application Support/wechat-provider/helper/runtime.json`，更新时用 `--configure-only` 只改外部配置，不重编/重签 Helper。ad-hoc 代码身份随 Helper 版本变化（Apple TN3127），更新 Helper 后 macOS 可能要求重新授权；不承诺“永久 FDA”。IPC 状态中 `read_access=verified` 只表示该进程成功读取过结构化来源，`tcc_verified` 始终为 `false`，均不等于 TCC 归属验收。真实 TCC/FDA 验收（C）、Bridge/Python 更新后权限保持（D）和 Helper 更新后重授（E）尚未进行，需要用户单独批准。安装方式及 A–E 验收划分见 [独立 Provider](MACOS_INDEPENDENT_PROVIDER.md)。不要为此重新取钥、重签名微信、重置 TCC 或重新登录。
