@@ -321,9 +321,9 @@ class PeerBoundaryTest(unittest.TestCase):
         path.chmod(0o600)
         listener.listen(1)
         self.addCleanup(listener.close)
-        with patch("wechat_provider.local_ipc.peer_uid", return_value=os.getuid() + 1):
-            with self.assertRaises(PermissionError) as caught:
-                RemoteService(path).status()
+        with (patch("wechat_provider.local_ipc.peer_uid", return_value=os.getuid() + 1),
+              self.assertRaises(PermissionError) as caught):
+            RemoteService(path).status()
         self.assertEqual(str(caught.exception), "wrong_service_user")
         self.assertNotIn(str(root), str(caught.exception))
 
@@ -397,7 +397,6 @@ class ErrorCodeBoundaryTest(unittest.TestCase):
     PRIVATE = "/Users/synthetic/Library/Containers/com.tencent.xinWeChat/private.db"
 
     def _service(self, error):
-        private = self.PRIVATE
         class Service:
             def status(self):
                 return {"installed": True}
@@ -677,7 +676,7 @@ def _read_json_line(stream, timeout=15):
     def read():
         try:
             box["line"] = stream.readline()
-        except Exception as error:  # pragma: no cover - defensive
+        except Exception as error:  # noqa: BLE001  # pragma: no cover - test helper
             box["error"] = error
     thread = threading.Thread(target=read, daemon=True)
     thread.start()
