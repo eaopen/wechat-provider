@@ -129,7 +129,10 @@ def main():
     try:
         from wechat_bridge.core.config import load_config
         from wechat_bridge.adapters.wechat_4_1 import open_adapter, ADAPTER_VERSION
-        if ADAPTER_VERSION != 'wechat-4.1.15-270102-270135-v2' or not 1 <= args.limit <= 100:
+        if ADAPTER_VERSION not in (
+            'wechat-4.1.15-270102-270135-v2',
+            'wechat-4.1.15-4.2.0-270102-270135-270350-v3',
+        ) or not 1 <= args.limit <= 100:
             raise ValueError()
         state = Path(args.state_dir)
         if not all((state / f).is_file() for f in ('config.json', 'keys.json', 'identity.json')):

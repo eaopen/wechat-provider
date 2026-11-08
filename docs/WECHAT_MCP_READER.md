@@ -15,7 +15,9 @@ WECHAT_PROVIDER_WM_SOURCE_ID=sha256:YOUR_BOUND_SOURCE_ID
 
 State 目录必须已有 `config.json`、`keys.json`、`identity.json`。密钥、配置和绑定信息仅保存在用户受限目录，不提交仓库。来源身份为 SDK 的 `inventory.account_id` 与 `config.state_dir.resolve()` 字符串连接后的 UTF-8 SHA-256，前缀为 `sha256:`；由本地 SDK 计算并明确绑定，响应身份不一致时拒绝读取。
 
-当前适配器固定支持 `ADAPTER_VERSION=wechat-4.1.15-270102-270135-v2`，使用 SDK 内部读取接口；升级 SDK 后必须重新验证。未配置、版本不符、超时或失败均不自动改用其他读取来源。状态检查不打开微信数据库，`verified=false` 不因安装或配置完成而变为实机验收。
+原版 SDK 的读取契约为 `ADAPTER_VERSION=wechat-4.1.15-270102-270135-v2`，使用 SDK 内部读取接口；升级 SDK 后必须重新验证。未配置、版本不符、超时或失败均不自动改用其他读取来源。状态检查不打开微信数据库，`verified=false` 不因安装或配置完成而变为实机验收。
+
+2026-11-08 本机增加精确兼容补丁：微信 **4.2.0 / 270350**，SDK 标识 `wechat-4.1.15-4.2.0-270102-270135-270350-v3`；Provider 同时接受原 v2 和此 v3。已使用保存的密钥验证当前必需数据库结构，并通过真实 MCP 会话与消息分页。此为本机 SDK 源码补丁，不代表上游版本已支持 4.2.0；复现补丁和验证范围见 [本机 4.2.0 验证](WECHAT_420_LOCAL_VALIDATION_2026-11-08.md)。
 
 ## 数据边界
 

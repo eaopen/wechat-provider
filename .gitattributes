@@ -1,0 +1,2 @@
+# Unified patch context must preserve its original whitespace.
+docs/patches/*.patch -whitespace

@@ -1,0 +1,81 @@
+diff --git a/src/wechat_bridge/adapters/wechat_4_1.py b/src/wechat_bridge/adapters/wechat_4_1.py
+index 75368a2..ef2898d 100644
+--- a/src/wechat_bridge/adapters/wechat_4_1.py
++++ b/src/wechat_bridge/adapters/wechat_4_1.py
+@@ -1,4 +1,4 @@
+-"""Explicit column mappings observed on 4.1.15 builds 270102 and 270135.
++"""Mappings observed on 4.1.15/270102,270135 and locally verified 4.2.0/270350.
+ 
+ Source usernames and membership come from structured records. Unknown formats
+ retain diagnostics rather than inferred relationships.
+@@ -21,10 +21,15 @@ from .models import Contact, Conversation, Membership, SourceRef
+ from .schema import SchemaDescriptor, MSG_TABLE, inspect_schema
+ from .wire import parse_fields
+ 
+-ADAPTER_VERSION = "wechat-4.1.15-270102-270135-v2"
++ADAPTER_VERSION = "wechat-4.1.15-4.2.0-270102-270135-270350-v3"
+ # 270135 (auto-update, 14 Oct 2026) was accepted on evidence that every required
+ # table and column is identical to 270102; see docs/compatibility.md.
+-SUPPORTED_BUILDS = frozenset({"270102", "270135"})
++# Local compatibility extension: 4.2.0/270350 required mappings were checked
++# against the owner's live, WAL-aware, read-only databases on 2026-11-08.
++# Other version/build pairs remain rejected; schema and key checks still run.
++SUPPORTED_VERSION_BUILDS = frozenset({("4.1.15", "270102"), ("4.1.15", "270135"),
++                                      ("4.2.0", "270350")})
++SUPPORTED_BUILDS = frozenset(build for _, build in SUPPORTED_VERSION_BUILDS)
+ INFO_PLIST = Path("/Applications/WeChat.app/Contents/Info.plist")
+ CONTACT = {"id": "INTEGER", "username": "TEXT", "nick_name": "TEXT", "remark": "TEXT"}
+ ROOM = {"id": "INTEGER", "username": "TEXT", "owner": "TEXT", "ext_buffer": "BLOB"}
+@@ -107,7 +112,7 @@ def open_adapter(config: Config, *, build: str | None = None):
+         try:
+             with INFO_PLIST.open("rb") as stream:
+                 info = plistlib.load(stream)
+-            if info.get("CFBundleShortVersionString") != "4.1.15":
++            if (info.get("CFBundleShortVersionString"), info.get("CFBundleVersion")) not in SUPPORTED_VERSION_BUILDS:
+                 raise BridgeError("unsupported_build")
+             build = info.get("CFBundleVersion")
+         except (OSError, plistlib.InvalidFileException):
+diff --git a/tests/unit/test_schema_420_local.py b/tests/unit/test_schema_420_local.py
+new file mode 100644
+index 0000000..9928060
+--- /dev/null
++++ b/tests/unit/test_schema_420_local.py
+@@ -0,0 +1,38 @@
++"""Local exact-build acceptance; unsupported pairs and schema drift fail closed."""
++import plistlib
++
++import pytest
++
++from tests.support.schemas import account_case
++from wechat_bridge.adapters import wechat_4_1
++from wechat_bridge.core.errors import BridgeError
++
++
++@pytest.mark.parametrize("version,build,accepted", [
++    ("4.2.0", "270350", True),
++    ("4.2.0", "270349", False),
++    ("4.2.0", "270351", False),
++    ("4.1.15", "270350", False),
++    ("4.2.0", "270135", False),
++    ("4.2.1", "270350", False),
++])
++def test_installed_exact_pair(tmp_path, monkeypatch, version, build, accepted):
++    cfg = account_case(tmp_path)
++    info = tmp_path / "Info.plist"
++    info.write_bytes(plistlib.dumps({"CFBundleShortVersionString": version, "CFBundleVersion": build}))
++    monkeypatch.setattr(wechat_4_1, "INFO_PLIST", info)
++    if accepted:
++        adapter = wechat_4_1.open_adapter(cfg)
++        assert adapter.build == "270350"
++        assert list(adapter.conversations())
++    else:
++        with pytest.raises(BridgeError, match="unsupported_build"):
++            wechat_4_1.open_adapter(cfg)
++
++
++def test_new_build_still_rejects_incompatible_schema(tmp_path):
++    cfg = account_case(tmp_path, changes={
++        "contact/contact.db": "ALTER TABLE contact RENAME COLUMN username TO unknown_column",
++    })
++    with pytest.raises(BridgeError, match="unsupported_schema"):
++        wechat_4_1.open_adapter(cfg, build="270350")

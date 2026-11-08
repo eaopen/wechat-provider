@@ -1,17 +1,53 @@
 import contextlib
 import os
-from pathlib import Path
 import sys
 import tempfile
 import types
 import unittest
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import Mock, patch
 
 from wechat_provider.wechat_mcp_reader import WechatMCPReader, configured_reader
-from wechat_provider.wechat_mcp_worker import encode_cursor, decode_cursor, query
+from wechat_provider.wechat_mcp_worker import decode_cursor, encode_cursor, query
 
 
 class WorkerTest(unittest.TestCase):
+    def test_worker_sdk_allowlist_rejects_unknown_versions_before_opening_source(self):
+        import io
+
+        from wechat_provider.wechat_mcp_worker import main
+
+        versions = ('wechat-4.1.15-270102-270135-v2',
+                    'wechat-4.1.15-4.2.0-270102-270135-270350-v3', 'unreviewed-v4')
+        with tempfile.TemporaryDirectory() as temp:
+            state = Path(temp)
+            (state / 'db_storage').mkdir()
+            for name in ('config.json', 'keys.json', 'identity.json'):
+                (state / name).touch()
+            for version in versions:
+                config = types.SimpleNamespace(account_root=state)
+                open_adapter = Mock(return_value=object())
+                load_config = Mock(return_value=config)
+                modules = {
+                    'wechat_bridge.core.config': types.SimpleNamespace(load_config=load_config),
+                    'wechat_bridge.adapters.wechat_4_1': types.SimpleNamespace(
+                        open_adapter=open_adapter, ADAPTER_VERSION=version),
+                }
+                output = io.StringIO()
+                with (self.subTest(version=version), patch.dict(sys.modules, modules),
+                      patch.object(sys, 'argv', ['worker', '--state-dir', temp,
+                                                 'conversations', 'list', '--profile', 'bound']),
+                      patch('wechat_provider.wechat_mcp_worker.query', return_value={'ok': True}),
+                      contextlib.redirect_stdout(output)):
+                    code = main()
+                if version == 'unreviewed-v4':
+                    self.assertEqual(code, 1)
+                    load_config.assert_not_called()
+                    open_adapter.assert_not_called()
+                else:
+                    self.assertEqual(code, 0)
+                    open_adapter.assert_called_once_with(config)
+
     def test_cursor_binds_account_operation_chat_and_search(self):
         binding = ['source', 'messages.list', 'chat', None]
         cursor = encode_cursor(binding, [5, 'shard', 2])

@@ -139,4 +139,4 @@ License: Apache-2.0. 第三方依赖遵循各自许可，不直接复制其源�
 
 支持 `import-chatlab` 离线导入 ChatLab 0.0.2 JSON，以及每行一个完整页面文档的 JSONL；`WECHAT_PROVIDER_READER=weflow` 可通过现有 `structured_db` 接口按需读取显式配置的本机 API。`sync-weflow` 将选定会话的文本有界导入自有索引，逐页原子保存续传位置，支持重放去重和本地检索。
 
-目前只处理带稳定消息 ID 的文本；非文本显式计数跳过，不下载附件。新能力仅通过合成数据、本机模拟 HTTP 和真实 CLI/MCP 协议验证，**没有安装或验收真实 WeFlow/微信**。配置、命令、分页兼容说明及验证记录见 [WeFlow Reader](docs/WEFLOW_READER.md)。
+目前只处理带稳定消息 ID 的文本；非文本显式计数跳过，不下载附件。WeFlow 适配器仅通过合成数据、本机模拟 HTTP 和真实 CLI/MCP 协议验证，**没有安装或验收真实 WeFlow**。配置、命令及分页兼容说明见 [WeFlow Reader](docs/WEFLOW_READER.md)。另一路 Wechat-MCP Reader 已通过本机微信 4.2.0 / 270350 的真实只读 MCP 验证，范围及 SDK 补丁见 [本机验证记录](docs/WECHAT_420_LOCAL_VALIDATION_2026-11-08.md)。
