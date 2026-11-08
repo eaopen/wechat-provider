@@ -6,6 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
+from .models import AdapterUnavailable
 from .service import new_service
 
 
@@ -32,6 +33,15 @@ def main() -> None:
     proxy.add_argument("--socket", required=True)
     imp = command.add_parser("import-jsonl", help="Index authorized normalized messages")
     imp.add_argument("path", type=Path)
+    chatlab = command.add_parser("import-chatlab", help="Index authorized ChatLab 0.0.2 text")
+    chatlab.add_argument("path", type=Path)
+    chatlab.add_argument("--source-id", required=True)
+    chatlab.add_argument("--session-id", required=True)
+    chatlab.add_argument("--owner-id")
+    sync = command.add_parser("sync-weflow", help="Explicit bounded read-only WeFlow text pull")
+    sync.add_argument("--session-id", required=True)
+    sync.add_argument("--max-pages", type=int, default=10)
+    sync.add_argument("--page-size", type=int, default=100)
     args = parser.parse_args()
     if args.action == "daemon":
         from .local_ipc import serve
@@ -56,8 +66,20 @@ def main() -> None:
         print(json.dumps(svc.status(), ensure_ascii=False, indent=2))
     else:
         try:
-            result = import_jsonl(svc, args.path)
+            if args.action == "import-chatlab":
+                from .chatlab_import import import_chatlab
+                result = import_chatlab(svc, args.path, args.source_id, args.session_id, args.owner_id)
+            elif args.action == "sync-weflow":
+                from .weflow_reader import WeFlowReader, sync_weflow
+                result = sync_weflow(svc, WeFlowReader.from_env(), args.session_id,
+                                     args.max_pages, args.page_size)
+            else:
+                result = import_jsonl(svc, args.path)
         except ValueError as exc:
+            parser.error(str(exc))
+        except OSError:
+            parser.error("local export or index unavailable")
+        except AdapterUnavailable as exc:
             parser.error(str(exc))
         print(json.dumps(result, ensure_ascii=False, indent=2))
 

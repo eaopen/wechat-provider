@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -54,6 +55,22 @@ class Store:
                 );
                 CREATE INDEX IF NOT EXISTS idx_messages_chat
                     ON messages(account_key, chat_id, sent_at, id);
+                CREATE TABLE IF NOT EXISTS imported_conversations (
+                    account_key TEXT NOT NULL,
+                    chat_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    source_namespace TEXT NOT NULL,
+                    source_identity TEXT NOT NULL,
+                    conversation_id TEXT NOT NULL,
+                    owner_id TEXT NOT NULL,
+                    PRIMARY KEY(account_key, chat_id)
+                );
+                CREATE TABLE IF NOT EXISTS import_cursors (
+                    account_key TEXT NOT NULL,
+                    chat_id TEXT NOT NULL,
+                    cursor TEXT NOT NULL,
+                    PRIMARY KEY(account_key, chat_id)
+                );
                 CREATE TABLE IF NOT EXISTS send_tasks (
                     task_id TEXT PRIMARY KEY,
                     account_key TEXT NOT NULL,
@@ -121,10 +138,35 @@ class Store:
                 count += result.rowcount
         return count
 
-    def import_messages(self, account_key: str, rows: list[dict[str, Any]]) -> dict:
+    def import_messages(self, account_key: str, rows: list[dict[str, Any]],
+                        conversations=(), checkpoint=None, expected_checkpoint=None) -> dict:
         """One transaction; duplicate IDs must agree, never silently overwrite history."""
         imported = duplicates = 0
         with self._connect() as db:
+            if checkpoint is not None:
+                db.execute("BEGIN IMMEDIATE")
+                previous = db.execute(
+                    "SELECT cursor FROM import_cursors WHERE account_key=? AND chat_id=?",
+                    (account_key, checkpoint["chat_id"]),
+                ).fetchone()
+                actual = json.loads(previous[0]) if previous else None
+                if actual != expected_checkpoint:
+                    raise ValueError("sync checkpoint changed; retry explicitly")
+            for conversation in conversations:
+                identity = (account_key, conversation["chat_id"])
+                binding = (conversation["source_namespace"], conversation["source_identity"],
+                           conversation["conversation_id"], conversation["owner_id"])
+                previous = db.execute(
+                    "SELECT source_namespace, source_identity, conversation_id, owner_id "
+                    "FROM imported_conversations WHERE account_key=? AND chat_id=?", identity,
+                ).fetchone()
+                if previous and tuple(previous) != binding:
+                    raise ValueError("conversation identity conflict; entire import rolled back")
+                db.execute(
+                    "INSERT INTO imported_conversations VALUES (?,?,?,?,?,?,?) "
+                    "ON CONFLICT(account_key,chat_id) DO UPDATE SET title=excluded.title",
+                    (*identity, conversation["title"], *binding),
+                )
             for row in rows:
                 identity = (account_key, row["chat_id"], row["source_id"])
                 existing = db.execute(
@@ -152,17 +194,47 @@ class Store:
                     (*identity, *values, utc_now()),
                 )
                 imported += 1
+            if checkpoint is not None:
+                db.execute(
+                    "INSERT INTO import_cursors VALUES (?,?,?) "
+                    "ON CONFLICT(account_key,chat_id) DO UPDATE SET cursor=excluded.cursor",
+                    (account_key, checkpoint["chat_id"], json.dumps(checkpoint)),
+                )
         return {"imported": imported, "duplicates": duplicates}
+
+    def get_import_cursor(self, account_key: str, chat_id: str):
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT cursor FROM import_cursors WHERE account_key=? AND chat_id=?",
+                (account_key, chat_id),
+            ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def conversation_identity(self, account_key: str, chat_id: str):
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT title, source_namespace, source_identity, conversation_id, owner_id "
+                "FROM imported_conversations WHERE account_key=? AND chat_id=?",
+                (account_key, chat_id),
+            ).fetchone()
+        return {**dict(row), "id_kind": "stable_conversation_id"} if row else {
+            "id_kind": "display_name",
+        }
 
     def list_chats(self, account_key: str, limit: int = 30) -> list[dict[str, Any]]:
         """Only our existing index; never enumerate a desktop or another account."""
         with self._connect() as db:
             rows = db.execute(
-                "SELECT chat_id, MAX(imported_at) AS last_indexed_at, COUNT(*) AS message_count "
-                "FROM messages WHERE account_key=? GROUP BY chat_id ORDER BY MAX(id) DESC LIMIT ?",
+                "SELECT m.chat_id, MAX(m.imported_at) AS last_indexed_at, COUNT(*) AS message_count, "
+                "COALESCE(c.title,m.chat_id) AS title, c.source_namespace, c.source_identity, "
+                "c.conversation_id, c.owner_id, CASE WHEN c.chat_id IS NULL THEN 'display_name' "
+                "ELSE 'stable_conversation_id' END AS id_kind FROM messages m "
+                "LEFT JOIN imported_conversations c ON c.account_key=m.account_key "
+                "AND c.chat_id=m.chat_id WHERE m.account_key=? "
+                "GROUP BY m.chat_id ORDER BY MAX(m.id) DESC LIMIT ?",
                 (account_key, min(max(1, limit), 100)),
             ).fetchall()
-        return [{**dict(row), "title": row["chat_id"], "id_kind": "display_name"} for row in rows]
+        return [{key: value for key, value in dict(row).items() if value is not None} for row in rows]
 
     def get_messages(self, account_key: str, chat_id: str, limit: int = 50) -> list[dict[str, Any]]:
         with self._connect() as db:

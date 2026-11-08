@@ -134,3 +134,9 @@ License: Apache-2.0. 第三方依赖遵循各自许可，不直接复制其源�
 ### 可选 Wechat-MCP 已授权数据库 Reader
 
 已有逐数据库密钥及 Wechat-MCP SDK 时，可通过独立只读 Reader 直接分页读取当前数据库及 WAL，无需全量归档。配置、版本约束及有界搜索说明见 [Wechat-MCP Reader](docs/WECHAT_MCP_READER.md)。不执行取钥、登录或发送；与 GreenBubbles 二选一配置，共用现有 MCP 接口。
+
+### 可选 WeFlow / ChatLab 只读接入
+
+支持 `import-chatlab` 离线导入 ChatLab 0.0.2 JSON，以及每行一个完整页面文档的 JSONL；`WECHAT_PROVIDER_READER=weflow` 可通过现有 `structured_db` 接口按需读取显式配置的本机 API。`sync-weflow` 将选定会话的文本有界导入自有索引，逐页原子保存续传位置，支持重放去重和本地检索。
+
+目前只处理带稳定消息 ID 的文本；非文本显式计数跳过，不下载附件。新能力仅通过合成数据、本机模拟 HTTP 和真实 CLI/MCP 协议验证，**没有安装或验收真实 WeFlow/微信**。配置、命令、分页兼容说明及验证记录见 [WeFlow Reader](docs/WEFLOW_READER.md)。

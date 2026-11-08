@@ -94,7 +94,8 @@ class Service:
         if source == "local_index":
             return {"messages": self.store.get_messages(self.account_key, chat_id, limit),
                     "chat_id": chat_id, "source": "local_index", "complete": False,
-                    "live_read": False, "id_kind": "display_name",
+                    "live_read": False,
+                    **self.store.conversation_identity(self.account_key, chat_id),
                     "warning": "Previously indexed/imported text only; not a live WeChat read."}
         limit = min(max(1, limit), 100)
         try:
@@ -144,6 +145,8 @@ class Service:
         if source != "local_index" or cursor is not None:
             raise ValueError("unsupported search source or cursor")
         rows = self.store.search(self.account_key, query, chat_id, limit)
+        for row in rows:
+            row.update(self.store.conversation_identity(self.account_key, row["chat_id"]))
         return {
             "matches": rows,
             "source": "local_index",
@@ -160,6 +163,8 @@ class Service:
             raise ValueError("Plain text must be 1-2000 characters")
         if idempotency_key and len(idempotency_key) > 200:
             raise ValueError("idempotency_key too long")
+        if self.store.conversation_identity(self.account_key, chat_id)["id_kind"] != "display_name":
+            raise ValueError("imported stable conversation IDs are read-only, not UI send targets")
 
         task = self.store.queue_send(self.account_key, chat_id, text, idempotency_key)
         # One GUI driver per machine. Queue state is persisted *before* UI work.
