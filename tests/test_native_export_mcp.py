@@ -26,6 +26,7 @@ from wechat_provider.store import Store
 
 TRANSCRIPT = "聊天记录.txt"
 EXPECTED_TOOLS = {
+    "wechat_storage_inventory",
     "wechat_status",
     "wechat_list_chats",
     "wechat_get_messages",
