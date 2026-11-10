@@ -28,6 +28,32 @@ def query(adapter, operation, limit, conversation_id=None, cursor=None, search=N
         (adapter.inventory.account_id + str(adapter.config.state_dir.resolve())).encode()).hexdigest()
     binding = [identity, operation, conversation_id, search]
     before = decode_cursor(cursor, binding)
+    if operation == 'messages.search' and conversation_id is None:
+        # One conversation/window per request keeps source access and RPC bounded.
+        # The caller must follow even empty pages; this is not a full-history index.
+        conversations = sorted(adapter.conversations(), key=lambda c: c.conversation_id)
+        if before is not None and (not isinstance(before, dict)
+                or set(before) != {'conversation', 'cursor'}
+                or not isinstance(before['conversation'], str)
+                or (before['cursor'] is not None and not isinstance(before['cursor'], str))):
+            raise ValueError('invalid cross-conversation search cursor')
+        remaining = [c for c in conversations if before is None
+                     or c.conversation_id >= before['conversation']]
+        if not remaining:
+            return envelope(identity, operation, [], False, None)
+        current = remaining[0]
+        inner = before['cursor'] if before and current.conversation_id == before['conversation'] else None
+        result = query(adapter, operation, limit, current.conversation_id, inner, search)
+        page = result['page']
+        next_key = ({'conversation': current.conversation_id, 'cursor': page['nextCursor']}
+                    if page['hasMore'] else
+                    {'conversation': remaining[1].conversation_id, 'cursor': None}
+                    if len(remaining) > 1 else None)
+        result['page']['hasMore'] = next_key is not None
+        result['page']['nextCursor'] = encode_cursor(binding, next_key) if next_key else None
+        result['warnings'].append({'code': 'bounded_search_window',
+                                   'message': 'One conversation, up to 100 inspected rows; follow all pages, including empty pages.'})
+        return result
     items = []
     keys = []
     if operation == 'conversations.list':
@@ -129,7 +155,10 @@ def main():
     try:
         from wechat_bridge.core.config import load_config
         from wechat_bridge.adapters.wechat_4_1 import open_adapter, ADAPTER_VERSION
-        if ADAPTER_VERSION != 'wechat-4.1.15-270102-270135-v2' or not 1 <= args.limit <= 100:
+        if ADAPTER_VERSION not in (
+            'wechat-4.1.15-270102-270135-v2',
+            'wechat-4.1.15-4.2.0-270102-270135-270350-v3',
+        ) or not 1 <= args.limit <= 100:
             raise ValueError()
         state = Path(args.state_dir)
         if not all((state / f).is_file() for f in ('config.json', 'keys.json', 'identity.json')):

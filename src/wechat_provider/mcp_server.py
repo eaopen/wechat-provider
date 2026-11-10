@@ -100,6 +100,31 @@ def wechat_get_send_status(task_id: str) -> dict:
     return service().get_send_status(task_id)
 
 
+@mcp.tool()
+def wechat_storage_inventory(action: str, sources: list[dict] | None = None,
+                             job_id: str | None = None, max_entries: int = 250000,
+                             source_id: int | None = None, query: str = "",
+                             file_kind: str | None = None, sharing: str = "all",
+                             offset: int = 0, limit: int = 50, entry_path: str | None = None) -> dict:
+    """Inventory explicitly user-selected directories, without reading file contents.
+
+    action: discover/start/report/analyze/files/locate/cancel/resume. discover checks known macOS WeChat
+    locations and recommends sources, without starting an inventory. start sources: [{path: absolute directory,
+    kind: active_data/official_backup/historical_copy/cache_downloads/other}].
+    Starts a bounded metadata worker and saves private inventory state. No source
+    mutation, content hashing, backup restore checks or AI analysis. analyze
+    triages backups from the finished saved inventory, without source reads or
+    rescanning; file mtimes and hardlink sharing do not prove chat coverage. Other
+    governance operations are separate capabilities, not exposed by this policy.
+    files filters saved filenames (query literal, file_kind, sharing all/shared/
+    not_observed_shared); at most 50 paths ordered by size per page, no content
+    reads. locate validates a saved source_id/entry_path identity and returns its
+    local path; it does not open the file or launch Finder itself.
+    """
+    return service().storage_inventory(action, sources, job_id, max_entries,
+        source_id, query, file_kind, sharing, offset, limit, entry_path)
+
+
 def main() -> None:
     mcp.run(transport="stdio")
 

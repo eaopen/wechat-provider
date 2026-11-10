@@ -133,6 +133,26 @@ class IPCTest(unittest.TestCase):
                 self.assertEqual(len(remote.list_chats(5, 'local_index')['chats']), 1)
                 self.assertEqual(remote.forget_saved_excerpts('虚构聊天')['removed'], 1)
                 self.assertEqual(remote.list_chats(5, 'local_index')['chats'], [])
+                selected = root / 'inventory-fixture'
+                selected.mkdir()
+                (selected / 'fixture.txt').write_text('synthetic metadata')
+                job = remote.storage_inventory('start', sources=[{'path': str(selected), 'kind': 'other'}])
+                for _ in range(100):
+                    job = remote.storage_inventory('report', job_id=job['job_id'])
+                    if job['status'] not in ('queued', 'running'):
+                        break
+                    time.sleep(.03)
+                self.assertEqual(job['status'], 'completed')
+                self.assertEqual(job['totals']['file_paths'], 1)
+                self.assertIsNone(job['totals']['reclaimable_bytes'])
+                analysis = remote.storage_inventory('analyze', job_id=job['job_id'])
+                self.assertEqual(analysis['analysis_version'], 1)
+                self.assertFalse(analysis['scan_started'])
+                files = remote.storage_inventory('files', job_id=job['job_id'], source_id=1)
+                self.assertEqual(files['total_file_paths'], 1)
+                location = remote.storage_inventory('locate', job_id=job['job_id'], source_id=1,
+                                                     entry_path=files['items'][0]['path'])
+                self.assertTrue(location['identity_checked'])
                 # Actual MCP initialization, discovery and tool response through proxy.
                 frames = [
                     {'jsonrpc':'2.0','id':1,'method':'initialize','params':{

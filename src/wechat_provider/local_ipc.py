@@ -16,7 +16,7 @@ from .native_export import IPC_ERROR_CODES
 MAX_FRAME = 1024 * 1024
 METHODS = frozenset(('status', 'list_chats', 'get_messages', 'search',
                      'send_message', 'get_send_status', 'save_excerpt', 'forget_saved_excerpts',
-                     'native_export_preview', 'native_export_save'))
+                     'native_export_preview', 'native_export_save', 'storage_inventory', 'vault'))
 
 
 def peer_uid(connection):
@@ -118,7 +118,7 @@ def handle(connection, service):
                              'tcc_verified': False,
                              'read_access': getattr(service, '_ipc_read_state', 'not_checked')}
         send(connection, {'ok': True, 'result': result})
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 - sanitize every backend failure at the IPC boundary
         # Never reflect private paths, SQL, message text or backend exception details.
         # Only a small stable code set crosses the IPC boundary.
         if 'source_access_denied' in str(error):
