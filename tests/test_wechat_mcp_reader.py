@@ -5,13 +5,49 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from wechat_provider.wechat_mcp_reader import WechatMCPReader, configured_reader
 from wechat_provider.wechat_mcp_worker import decode_cursor, encode_cursor, query
 
 
 class WorkerTest(unittest.TestCase):
+    def test_worker_sdk_allowlist_rejects_unknown_versions_before_opening_source(self):
+        import io
+
+        from wechat_provider.wechat_mcp_worker import main
+
+        versions = ('wechat-4.1.15-270102-270135-v2',
+                    'wechat-4.1.15-4.2.0-270102-270135-270350-v3', 'unreviewed-v4')
+        with tempfile.TemporaryDirectory() as temp:
+            state = Path(temp)
+            (state / 'db_storage').mkdir()
+            for name in ('config.json', 'keys.json', 'identity.json'):
+                (state / name).touch()
+            for version in versions:
+                config = types.SimpleNamespace(account_root=state)
+                open_adapter = Mock(return_value=object())
+                load_config = Mock(return_value=config)
+                modules = {
+                    'wechat_bridge.core.config': types.SimpleNamespace(load_config=load_config),
+                    'wechat_bridge.adapters.wechat_4_1': types.SimpleNamespace(
+                        open_adapter=open_adapter, ADAPTER_VERSION=version),
+                }
+                output = io.StringIO()
+                with (self.subTest(version=version), patch.dict(sys.modules, modules),
+                      patch.object(sys, 'argv', ['worker', '--state-dir', temp,
+                                                 'conversations', 'list', '--profile', 'bound']),
+                      patch('wechat_provider.wechat_mcp_worker.query', return_value={'ok': True}),
+                      contextlib.redirect_stdout(output)):
+                    code = main()
+                if version == 'unreviewed-v4':
+                    self.assertEqual(code, 1)
+                    load_config.assert_not_called()
+                    open_adapter.assert_not_called()
+                else:
+                    self.assertEqual(code, 0)
+                    open_adapter.assert_called_once_with(config)
+
     def test_cursor_binds_account_operation_chat_and_search(self):
         binding = ['source', 'messages.list', 'chat', None]
         cursor = encode_cursor(binding, [5, 'shard', 2])
@@ -61,6 +97,8 @@ class WorkerTest(unittest.TestCase):
                     table=lambda _:types.SimpleNamespace(columns=[]),quote_table=lambda _: 'Msg_test') for s in dbs]
         adapter = types.SimpleNamespace(inventory=types.SimpleNamespace(account_id='fixture'),
             config=types.SimpleNamespace(state_dir=Path('/synthetic')),
+            conversations=lambda: [types.SimpleNamespace(conversation_id='chat'),
+                                   types.SimpleNamespace(conversation_id='next-chat')],
             conversation=lambda _: types.SimpleNamespace(source_username='fixture'),
             identities=types.SimpleNamespace(add_conversation=lambda *a:None,add_sender=lambda *a:None),
             _message_tables=lambda _: [(s,'Msg_test') for s in schemas],_open=Reader)
@@ -83,3 +121,16 @@ class WorkerTest(unittest.TestCase):
             result=query(adapter,'messages.search',2,'chat',search='absent')
             self.assertEqual(result['items'],[])
             self.assertFalse(result['page']['hasMore'])
+            across=query(adapter,'messages.search',2,search='absent')
+            self.assertEqual(across['items'],[])
+            self.assertTrue(across['page']['hasMore'])
+            self.assertEqual(across['warnings'][-1]['code'],'bounded_search_window')
+            final=query(adapter,'messages.search',2,cursor=across['page']['nextCursor'],search='absent')
+            self.assertEqual(final['items'],[])
+            self.assertFalse(final['page']['hasMore'])
+            matched=query(adapter,'messages.search',2,search='synthetic')
+            self.assertEqual(len(matched['items']),2)
+            matched_next=query(adapter,'messages.search',2,cursor=matched['page']['nextCursor'],search='synthetic')
+            self.assertFalse(set(x['id'] for x in matched['items']) & set(x['id'] for x in matched_next['items']))
+            with self.assertRaises(ValueError):
+                query(adapter,'messages.search',2,cursor=matched['page']['nextCursor'],search='changed')

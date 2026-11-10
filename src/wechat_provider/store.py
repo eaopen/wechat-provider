@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import uuid
 from collections.abc import Iterator
@@ -40,6 +41,9 @@ class Store:
     def _initialize(self) -> None:
         with self._connect() as db:
             db.execute("PRAGMA journal_mode=WAL")
+            migrate_native_accounts = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='native_export_accounts'"
+            ).fetchone() is None
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS messages (
                     id INTEGER PRIMARY KEY,
@@ -55,6 +59,22 @@ class Store:
                 );
                 CREATE INDEX IF NOT EXISTS idx_messages_chat
                     ON messages(account_key, chat_id, sent_at, id);
+                CREATE TABLE IF NOT EXISTS imported_conversations (
+                    account_key TEXT NOT NULL,
+                    chat_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    source_namespace TEXT NOT NULL,
+                    source_identity TEXT NOT NULL,
+                    conversation_id TEXT NOT NULL,
+                    owner_id TEXT NOT NULL,
+                    PRIMARY KEY(account_key, chat_id)
+                );
+                CREATE TABLE IF NOT EXISTS import_cursors (
+                    account_key TEXT NOT NULL,
+                    chat_id TEXT NOT NULL,
+                    cursor TEXT NOT NULL,
+                    PRIMARY KEY(account_key, chat_id)
+                );
                 CREATE TABLE IF NOT EXISTS send_tasks (
                     task_id TEXT PRIMARY KEY,
                     account_key TEXT NOT NULL,
@@ -78,7 +98,22 @@ class Store:
                     source_zip_name TEXT,
                     imported_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS native_export_accounts (
+                    account_key TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL,
+                    label TEXT NOT NULL,
+                    timezone_offset_minutes INTEGER,
+                    source_zip_name TEXT,
+                    imported_at TEXT NOT NULL,
+                    PRIMARY KEY(account_key, fingerprint)
+                );
             """)
+            if migrate_native_accounts:
+                db.execute("""INSERT OR IGNORE INTO native_export_accounts
+                    SELECT DISTINCT m.account_key, n.fingerprint, n.label,
+                           n.timezone_offset_minutes, n.source_zip_name, n.imported_at
+                    FROM native_exports n JOIN messages m ON m.chat_id=n.session_id
+                    WHERE m.source='native_share'""")
             try:
                 db.execute(
                     "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING "
@@ -133,10 +168,35 @@ class Store:
                 count += result.rowcount
         return count
 
-    def import_messages(self, account_key: str, rows: list[dict[str, Any]]) -> dict:
+    def import_messages(self, account_key: str, rows: list[dict[str, Any]],
+                        conversations=(), checkpoint=None, expected_checkpoint=None) -> dict:
         """One transaction; duplicate IDs must agree, never silently overwrite history."""
         imported = duplicates = 0
         with self._connect() as db:
+            if checkpoint is not None:
+                db.execute("BEGIN IMMEDIATE")
+                previous = db.execute(
+                    "SELECT cursor FROM import_cursors WHERE account_key=? AND chat_id=?",
+                    (account_key, checkpoint["chat_id"]),
+                ).fetchone()
+                actual = json.loads(previous[0]) if previous else None
+                if actual != expected_checkpoint:
+                    raise ValueError("sync checkpoint changed; retry explicitly")
+            for conversation in conversations:
+                identity = (account_key, conversation["chat_id"])
+                binding = (conversation["source_namespace"], conversation["source_identity"],
+                           conversation["conversation_id"], conversation["owner_id"])
+                previous = db.execute(
+                    "SELECT source_namespace, source_identity, conversation_id, owner_id "
+                    "FROM imported_conversations WHERE account_key=? AND chat_id=?", identity,
+                ).fetchone()
+                if previous and tuple(previous) != binding:
+                    raise ValueError("conversation identity conflict; entire import rolled back")
+                db.execute(
+                    "INSERT INTO imported_conversations VALUES (?,?,?,?,?,?,?) "
+                    "ON CONFLICT(account_key,chat_id) DO UPDATE SET title=excluded.title",
+                    (*identity, conversation["title"], *binding),
+                )
             for row in rows:
                 identity = (account_key, row["chat_id"], row["source_id"])
                 existing = db.execute(
@@ -164,6 +224,12 @@ class Store:
                     (*identity, *values, utc_now()),
                 )
                 imported += 1
+            if checkpoint is not None:
+                db.execute(
+                    "INSERT INTO import_cursors VALUES (?,?,?) "
+                    "ON CONFLICT(account_key,chat_id) DO UPDATE SET cursor=excluded.cursor",
+                    (account_key, checkpoint["chat_id"], json.dumps(checkpoint)),
+                )
         return {"imported": imported, "duplicates": duplicates}
 
     def delete_manual_excerpts(self, account_key: str, chat_title: str) -> int:
@@ -175,53 +241,66 @@ class Store:
                 (account_key, chat_title),
             )
             return result.rowcount
+    def get_import_cursor(self, account_key: str, chat_id: str):
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT cursor FROM import_cursors WHERE account_key=? AND chat_id=?",
+                (account_key, chat_id),
+            ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def conversation_identity(self, account_key: str, chat_id: str):
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT title, source_namespace, source_identity, conversation_id, owner_id "
+                "FROM imported_conversations WHERE account_key=? AND chat_id=?",
+                (account_key, chat_id),
+            ).fetchone()
+        return {**dict(row), "id_kind": "stable_conversation_id"} if row else {
+            "id_kind": "display_name",
+        }
 
     def list_chats(self, account_key: str, limit: int = 30) -> list[dict[str, Any]]:
-        """Only our existing index; never enumerate a desktop or another account."""
+        """One account-scoped index, preserving both imported identities and share provenance."""
         with self._connect() as db:
             rows = db.execute(
-                "SELECT chat_id, MAX(imported_at) AS last_indexed_at, COUNT(*) AS message_count, "
-                "SUM(CASE WHEN source='manual_excerpt' THEN 1 ELSE 0 END) AS manual_count, "
-                "SUM(CASE WHEN source='native_share' THEN 1 ELSE 0 END) AS native_count "
-                "FROM messages WHERE account_key=? GROUP BY chat_id ORDER BY MAX(id) DESC LIMIT ?",
+                "SELECT m.chat_id, MAX(m.imported_at) AS last_indexed_at, COUNT(*) AS message_count, "
+                "COALESCE(c.title,m.chat_id) AS title, c.source_namespace, c.source_identity, "
+                "c.conversation_id, c.owner_id, CASE WHEN c.chat_id IS NULL THEN 'display_name' "
+                "ELSE 'stable_conversation_id' END AS id_kind, "
+                "SUM(CASE WHEN m.source='manual_excerpt' THEN 1 ELSE 0 END) AS manual_count, "
+                "SUM(CASE WHEN m.source='native_share' THEN 1 ELSE 0 END) AS native_count "
+                "FROM messages m LEFT JOIN imported_conversations c "
+                "ON c.account_key=m.account_key AND c.chat_id=m.chat_id "
+                "WHERE m.account_key=? GROUP BY m.chat_id ORDER BY MAX(m.id) DESC LIMIT ?",
                 (account_key, min(max(1, limit), 100)),
             ).fetchall()
-            native_ids = [row["chat_id"] for row in rows if row["native_count"] == row["message_count"]]
-            labels: dict[str, str] = {}
+            native_ids = [r['chat_id'] for r in rows if r['native_count'] == r['message_count']]
+            labels = {}
             if native_ids:
-                marks = ",".join("?" for _ in native_ids)
-                for label_row in db.execute(
-                    f"SELECT session_id, label FROM native_exports WHERE session_id IN ({marks})",
-                    native_ids,
-                ):
-                    labels[label_row["session_id"]] = label_row["label"]
-        chats = []
+                marks = ','.join('?' for _ in native_ids)
+                labels = dict(db.execute(
+                    'SELECT n.session_id, a.label FROM native_exports n '
+                    'JOIN native_export_accounts a ON a.fingerprint=n.fingerprint '
+                    f'WHERE a.account_key=? AND n.session_id IN ({marks})',
+                    [account_key, *native_ids],
+                ).fetchall())
+        result = []
         for row in rows:
-            native_only = bool(row["message_count"]) and row["native_count"] == row["message_count"]
-            manual_only = bool(row["message_count"]) and row["manual_count"] == row["message_count"]
+            item = {key:value for key,value in dict(row).items() if value is not None}
+            native_count = item.pop('native_count')
+            manual_count = item.pop('manual_count')
+            native_only = native_count == item['message_count']
+            manual_only = manual_count == item['message_count']
+            item.update(native_share_only=native_only, manual_excerpt_only=manual_only,
+                        source_kind=('native_share' if native_only else 'manual_excerpt' if manual_only
+                                     else 'mixed' if native_count or manual_count else 'imported'))
             if native_only:
-                source_kind = "native_share"
-            elif manual_only:
-                source_kind = "manual_excerpt"
-            elif not row["native_count"] and not row["manual_count"]:
-                source_kind = "imported"
-            else:
-                source_kind = "mixed"
-            chats.append({
-                "chat_id": row["chat_id"],
-                "title": ((labels.get(row["chat_id"]) or row["chat_id"])
-                          if native_only else row["chat_id"]),
-                "id_kind": "display_name",
-                "last_indexed_at": row["last_indexed_at"],
-                "message_count": row["message_count"],
-                "source_kind": source_kind,
-                # Honest provenance: only user-saved excerpts vs native shares vs mixed imports.
-                "manual_excerpt_only": manual_only,
-                "native_share_only": native_only,
-            })
-        return chats
+                item['title'] = labels.get(item['chat_id']) or item['title']
+            result.append(item)
+        return result
 
-    def record_native_export(self, row: dict[str, Any]) -> bool:
+    def record_native_export(self, row: dict[str, Any], account_key: str | None = None) -> bool:
         """Idempotent metadata row in the existing SQLite; never a second index DB."""
         with self._connect() as db:
             result = db.execute(
@@ -233,9 +312,22 @@ class Store:
                  row["participant_count"], row["attachment_count"],
                  row.get("timezone_offset_minutes"), row.get("source_zip_name"), utc_now()),
             )
+            accounts = [account_key] if account_key is not None else [
+                existing[0] for existing in db.execute(
+                    "SELECT DISTINCT account_key FROM messages WHERE chat_id=? AND source='native_share'",
+                    (row["session_id"],),
+                )
+            ]
+            for owner in accounts:
+                result = db.execute(
+                    "INSERT OR IGNORE INTO native_export_accounts VALUES (?,?,?,?,?,?)",
+                    (owner, row["fingerprint"], row["label"],
+                     row.get("timezone_offset_minutes"), row.get("source_zip_name"), utc_now()),
+                )
             return result.rowcount == 1
 
-    def get_native_export(self, fingerprint: str) -> dict[str, Any] | None:
+    def get_native_export(self, fingerprint: str,
+                          account_key: str | None = None) -> dict[str, Any] | None:
         with self._connect() as db:
             row = db.execute(
                 """SELECT session_id, fingerprint, label, message_count, participant_count,
@@ -243,6 +335,13 @@ class Store:
                    FROM native_exports WHERE fingerprint=?""",
                 (fingerprint,),
             ).fetchone()
+            if row is not None and account_key is not None:
+                scoped = db.execute(
+                    "SELECT label, timezone_offset_minutes, source_zip_name, imported_at "
+                    "FROM native_export_accounts WHERE account_key=? AND fingerprint=?",
+                    (account_key, fingerprint),
+                ).fetchone()
+                return {**dict(row), **dict(scoped)} if scoped else None
         return dict(row) if row else None
 
     def get_messages(self, account_key: str, chat_id: str, limit: int = 50) -> list[dict[str, Any]]:
@@ -274,7 +373,7 @@ class Store:
                 phrase = '"' + query.replace('"', '""') + '"'
                 try:
                     rows = db.execute(
-                        """SELECT m.chat_id, m.text, m.sender, m.sent_at, m.source
+                        """SELECT m.chat_id, m.source_id, m.text, m.sender, m.sent_at, m.source
                            FROM messages_fts JOIN messages m ON m.id=messages_fts.rowid
                            WHERE messages_fts MATCH ? AND m.account_key=?"""
                         + extra + " ORDER BY m.id DESC LIMIT ?",
@@ -284,7 +383,7 @@ class Store:
                     rows = []
             if not rows:
                 rows = db.execute(
-                    """SELECT m.chat_id, m.text, m.sender, m.sent_at, m.source
+                    """SELECT m.chat_id, m.source_id, m.text, m.sender, m.sent_at, m.source
                        FROM messages m WHERE m.account_key=?"""
                     + extra + " AND m.text LIKE ? ESCAPE '!' ORDER BY m.id DESC LIMIT ?",
                     params + ["%" + query.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%", limit],

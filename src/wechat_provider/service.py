@@ -38,6 +38,8 @@ from .native_export import (
     load_native_export,
     render_preview,
 )
+from .storage_inventory import StorageInventory
+from .storage_inventory import capabilities as storage_capabilities
 from .store import Store
 from .wechat_mcp_reader import configured_reader
 
@@ -85,6 +87,60 @@ class Service:
             "timezone_offset_required_for_absolute_time": True,
         }
 
+    def vault(self, action: str, **kwargs):
+        from .vault import invoke
+        return invoke(self, action, **kwargs)
+
+    def storage_inventory(self, action: str, sources: list | None = None,
+                          job_id: str | None = None, max_entries: int = 250000,
+                          source_id: int | None = None, query: str = "",
+                          file_kind: str | None = None, sharing: str = "all",
+                          offset: int = 0, limit: int = 50, entry_path: str | None = None):
+        if action == "discover":
+            if sources is not None or job_id is not None:
+                raise ValueError("discovery does not accept source paths or a job ID")
+            from .storage_discovery import discover_sources
+            return discover_sources(reader_state=os.environ.get("WECHAT_PROVIDER_WM_STATE_DIR"))
+        manager = StorageInventory(
+            Path(os.environ.get("WECHAT_PROVIDER_STORAGE_DIR", str(self.store.path.parent / "storage"))),
+            self.account_key,
+        )
+        if action == "start":
+            if job_id is not None:
+                raise ValueError("start does not accept a job ID")
+            # Both clients reuse one daemon; reconnect to its active identical scan.
+            if manager.directory.is_dir():
+                for folder in manager.directory.iterdir():
+                    try:
+                        existing = manager.report(folder.name)
+                    except (OSError, ValueError):
+                        continue
+                    if existing['status'] in ('queued', 'running') and not existing['worker_stale']:
+                        requested = sorted((str(Path(s['path']).resolve()), s['kind']) for s in (sources or []))
+                        active = sorted((s['path'], s['kind']) for s in existing['sources'])
+                        if requested == active:
+                            return existing
+                        raise ValueError('another storage inventory is active; finish it first')
+            return manager.start(sources, max_entries)
+        if sources is not None:
+            raise ValueError("sources are only accepted when starting an inventory")
+        if action == "report":
+            return manager.report(job_id)
+        if action == "analyze":
+            from .storage_analysis import analyze_inventory
+            return analyze_inventory(manager, job_id)
+        if action == "files":
+            from .storage_files import saved_files
+            return saved_files(manager, job_id, source_id, query, file_kind, sharing, offset, limit)
+        if action == "locate":
+            from .storage_files import locate_file
+            return locate_file(manager, job_id, source_id, entry_path)
+        if action == "cancel":
+            return manager.cancel(job_id)
+        if action == "resume":
+            return manager.resume(job_id, max_entries)
+        raise ValueError("unsupported storage inventory action")
+
     def status(self) -> dict[str, Any]:
         adapter = self.adapter.status()
         reader = self.reader.status()
@@ -95,6 +151,8 @@ class Service:
             "fts5_enabled": self.store._fts,
             "adapter": adapter,
             "bridge_required": False,
+            "vault_contract_version": 1,
+            "storage_governance": storage_capabilities(),
             "read_contract_version": 1,
             "readers": {"local_index": {"available": True}, "structured_db": reader},
             "senders": {"native_ui": {"selected": True,
@@ -170,7 +228,7 @@ class Service:
             raise ValueError(ERROR_INVALID_ARGUMENT)
         if any(len(record.text.encode("utf-8")) > MAX_MESSAGE_BYTES for record in export.records):
             raise ValueError(ERROR_LIMIT)
-        already_saved = self.store.get_native_export(export.fingerprint) is not None
+        already_saved = self.store.get_native_export(export.fingerprint, self.account_key) is not None
         return render_preview(
             export,
             timezone_offset_minutes=timezone_offset_minutes,
@@ -205,7 +263,7 @@ class Service:
         if export.fingerprint != expected_fingerprint:
             # TOCTOU guard: the archive changed after preview; import nothing.
             raise ValueError(ERROR_CHANGED)
-        recorded = self.store.get_native_export(export.fingerprint)
+        recorded = self.store.get_native_export(export.fingerprint, self.account_key)
         if recorded is not None:
             # Already recorded: re-inserting would conflict when the offsets differ
             # and could rewrite `sent_at`; both are forbidden, so this is a bounded
@@ -236,7 +294,7 @@ class Service:
             "attachment_count": len(export.attachments),
             "timezone_offset_minutes": timezone_offset_minutes,
             "source_zip_name": export.archive_name,
-        })
+        }, self.account_key)
         return self._native_export_receipt(
             export,
             imported=result["imported"],
@@ -309,7 +367,8 @@ class Service:
         if source == "local_index":
             return {"messages": self.store.get_messages(self.account_key, chat_id, limit),
                     "chat_id": chat_id, "source": "local_index", "complete": False,
-                    "live_read": False, "id_kind": "display_name",
+                    "live_read": False,
+                    **self.store.conversation_identity(self.account_key, chat_id),
                     "warning": "Previously indexed/imported text only; not a live WeChat read."}
         limit = min(max(1, limit), 100)
         try:
@@ -359,6 +418,8 @@ class Service:
         if source != "local_index" or cursor is not None:
             raise ValueError("unsupported search source or cursor")
         rows = self.store.search(self.account_key, query, chat_id, limit)
+        for row in rows:
+            row.update(self.store.conversation_identity(self.account_key, row["chat_id"]))
         return {
             "matches": rows,
             "source": "local_index",
@@ -375,6 +436,8 @@ class Service:
             raise ValueError("Plain text must be 1-2000 characters")
         if idempotency_key and len(idempotency_key) > 200:
             raise ValueError("idempotency_key too long")
+        if self.store.conversation_identity(self.account_key, chat_id)["id_kind"] != "display_name":
+            raise ValueError("imported stable conversation IDs are read-only, not UI send targets")
 
         task = self.store.queue_send(self.account_key, chat_id, text, idempotency_key)
         # One GUI driver per machine. Queue state is persisted *before* UI work.

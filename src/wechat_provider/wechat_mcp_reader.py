@@ -29,6 +29,9 @@ class WechatMCPReader(GreenBubblesReader):
 
 def configured_reader():
     selected = os.environ.get("WECHAT_PROVIDER_READER", "greenbubbles")
+    if selected == "weflow":
+        from .weflow_reader import WeFlowReader
+        return WeFlowReader.from_env()
     if selected == "wechat_mcp":
         return WechatMCPReader(os.environ.get("WECHAT_PROVIDER_WM_PYTHON", ""),
                               os.environ.get("WECHAT_PROVIDER_WM_STATE_DIR", ""),

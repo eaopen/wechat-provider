@@ -16,7 +16,7 @@ from .native_export import IPC_ERROR_CODES
 MAX_FRAME = 1024 * 1024
 METHODS = frozenset(('status', 'list_chats', 'get_messages', 'search',
                      'send_message', 'get_send_status', 'save_excerpt', 'forget_saved_excerpts',
-                     'native_export_preview', 'native_export_save'))
+                     'native_export_preview', 'native_export_save', 'storage_inventory', 'vault'))
 
 
 def peer_uid(connection):
