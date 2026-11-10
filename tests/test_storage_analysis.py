@@ -11,6 +11,7 @@ from wechat_provider.storage_analysis import analyze_inventory
 from wechat_provider.storage_inventory import StorageInventory
 
 
+@unittest.skipUnless(os.name == "posix", "storage and archive tests require POSIX filesystem APIs")
 class BackupAnalysisTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

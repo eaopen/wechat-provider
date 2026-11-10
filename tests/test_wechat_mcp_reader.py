@@ -131,6 +131,6 @@ class WorkerTest(unittest.TestCase):
             matched=query(adapter,'messages.search',2,search='synthetic')
             self.assertEqual(len(matched['items']),2)
             matched_next=query(adapter,'messages.search',2,cursor=matched['page']['nextCursor'],search='synthetic')
-            self.assertFalse(set(x['id'] for x in matched['items']) & set(x['id'] for x in matched_next['items']))
+            self.assertFalse({x['id'] for x in matched['items']} & {x['id'] for x in matched_next['items']})
             with self.assertRaises(ValueError):
                 query(adapter,'messages.search',2,cursor=matched['page']['nextCursor'],search='changed')

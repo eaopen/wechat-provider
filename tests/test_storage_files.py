@@ -9,6 +9,7 @@ from wechat_provider.storage_files import locate_file, saved_files
 from wechat_provider.storage_inventory import StorageInventory
 
 
+@unittest.skipUnless(os.name == "posix", "storage and archive tests require POSIX filesystem APIs")
 class StorageFilesTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

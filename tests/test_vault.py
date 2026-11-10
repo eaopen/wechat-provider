@@ -14,6 +14,7 @@ from wechat_provider.store import Store
 from wechat_provider.vault_archive import ArchiveManager
 
 
+@unittest.skipUnless(os.name == "posix", "storage and archive tests require POSIX filesystem APIs")
 class VaultArchiveTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
